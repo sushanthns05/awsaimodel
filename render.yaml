@@ -7,9 +7,8 @@ services:
     runtime: python
     region: singapore
     plan: starter
-    rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    startCommand: python backend/run_api.py
     healthCheckPath: /health
     autoDeploy: true
     envVars:
@@ -48,7 +47,6 @@ services:
     runtime: python
     region: singapore
     plan: starter
-    rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: python backend/run_worker.py
     autoDeploy: true

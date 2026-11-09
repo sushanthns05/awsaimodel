@@ -46,7 +46,7 @@ export function ShortlistPage() {
   const [actionError, setActionError] = useState('')
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings, staleTime: 300_000 })
-  const roles = settings?.roles.roles ?? []
+  const roles = settings?.roles?.roles ?? []
 
   const queryParams = useMemo(
     () => ({

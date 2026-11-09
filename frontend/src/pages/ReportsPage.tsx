@@ -67,7 +67,7 @@ export function ReportsPage() {
   const [error, setError] = useState('')
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings, staleTime: 300_000 })
-  const roles = settings?.roles.roles ?? []
+  const roles = settings?.roles?.roles ?? []
 
   const { data, isLoading, isError, error: queryError, refetch, isFetching } = useQuery({
     queryKey: ['reports'],

@@ -12,7 +12,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api } from '../lib/api'
+import { api, isUsingDemoFallback } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { formatDate, formatScore, initials } from '../lib/utils'
 import { PageLoader, ErrorState, EmptyState } from '../components/States'
@@ -43,16 +43,43 @@ export function OverviewPage() {
   if (isLoading) return <PageLoader label="Loading recruitment overview…" />
   if (isError || !data) return <ErrorState message={(error as Error)?.message} onRetry={() => refetch()} />
 
-  const stats = data.stats
+  const stats = data.stats ?? {
+    totalApplications: 0,
+    processed: 0,
+    pending: 0,
+    failed: 0,
+    eligible: 0,
+    ineligible: 0,
+    needsReview: 0,
+    approvedShortlist: 0,
+    strongRecommendations: 0,
+    interviewConsideration: 0,
+    averageScore: 0,
+    highestScore: 0,
+  }
 
   return (
     <div className="space-y-6">
+      {isUsingDemoFallback() ? (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-lg border border-aws-orange/40 bg-amber-50/80 px-4 py-2.5 text-xs text-amber-950">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-aws-orange shrink-0" />
+            <span>
+              <strong>Sample Data Mode</strong>: Displaying SJBIT 2026–27 recruitment dataset. Connect your Render FastAPI URL in Settings anytime.
+            </span>
+          </div>
+          <Button variant="outline" size="sm" className="h-7 text-xs border-amber-300 bg-white shrink-0" onClick={() => navigate('/settings')}>
+            Backend Settings
+          </Button>
+        </div>
+      ) : null}
+
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-aws-orange">Recruitment cycle {data.organization?.cycle ?? '2026–27'}</p>
           <h2 className="mt-1 text-2xl font-bold tracking-tight text-navy-900">Application pipeline</h2>
           <p className="mt-1 text-xs text-slate-500">
-            Last refreshed {formatDate(data.generatedAt)} · {stats.totalApplications.toLocaleString('en-IN')} applications received
+            Last refreshed {formatDate(data.generatedAt)} · {(stats.totalApplications ?? 0).toLocaleString('en-IN')} applications received
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -77,14 +104,14 @@ export function OverviewPage() {
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Total applications" value={stats.totalApplications.toLocaleString('en-IN')} hint="All Google Form submissions" icon={Users} />
-        <StatCard label="Processed" value={stats.processed.toLocaleString('en-IN')} hint={`${stats.pending} pending · ${stats.failed} failed`} icon={CheckCircle2} tone="success" />
-        <StatCard label="Eligible" value={stats.eligible.toLocaleString('en-IN')} hint={`${stats.ineligible} flagged ineligible`} icon={UserCheck} tone="success" />
-        <StatCard label="Requires review" value={stats.needsReview.toLocaleString('en-IN')} hint="Incomplete, ineligible or uncertain" icon={ClipboardCheck} tone="warning" />
-        <StatCard label="Strong interview" value={stats.strongRecommendations.toLocaleString('en-IN')} hint={`${stats.interviewConsideration} for consideration`} icon={Sparkles} tone="orange" />
-        <StatCard label="Approved shortlist" value={stats.approvedShortlist.toLocaleString('en-IN')} hint="Human-approved for interview" icon={CalendarClock} tone="success" />
-        <StatCard label="Average score" value={formatScore(stats.averageScore)} hint="Across processed applications" icon={ArrowUpRight} />
-        <StatCard label="Failed processing" value={stats.failed.toLocaleString('en-IN')} hint="Requires reprocessing" icon={XCircle} tone={stats.failed > 0 ? 'danger' : 'default'} />
+        <StatCard label="Total applications" value={(stats.totalApplications ?? 0).toLocaleString('en-IN')} hint="All Google Form submissions" icon={Users} />
+        <StatCard label="Processed" value={(stats.processed ?? 0).toLocaleString('en-IN')} hint={`${stats.pending ?? 0} pending · ${stats.failed ?? 0} failed`} icon={CheckCircle2} tone="success" />
+        <StatCard label="Eligible" value={(stats.eligible ?? 0).toLocaleString('en-IN')} hint={`${stats.ineligible ?? 0} flagged ineligible`} icon={UserCheck} tone="success" />
+        <StatCard label="Requires review" value={(stats.needsReview ?? 0).toLocaleString('en-IN')} hint="Incomplete, ineligible or uncertain" icon={ClipboardCheck} tone="warning" />
+        <StatCard label="Strong interview" value={(stats.strongRecommendations ?? 0).toLocaleString('en-IN')} hint={`${stats.interviewConsideration ?? 0} for consideration`} icon={Sparkles} tone="orange" />
+        <StatCard label="Approved shortlist" value={(stats.approvedShortlist ?? 0).toLocaleString('en-IN')} hint="Human-approved for interview" icon={CalendarClock} tone="success" />
+        <StatCard label="Average score" value={formatScore(stats.averageScore ?? 0)} hint="Across processed applications" icon={ArrowUpRight} />
+        <StatCard label="Failed processing" value={(stats.failed ?? 0).toLocaleString('en-IN')} hint="Requires reprocessing" icon={XCircle} tone={(stats.failed ?? 0) > 0 ? 'danger' : 'default'} />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">

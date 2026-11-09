@@ -153,7 +153,7 @@ export function ApplicantDetailPage() {
 
   const applicant = data?.applicant
   const evaluation = data?.evaluation ?? null
-  const roleNames = settings?.roles.roles ?? []
+  const roleNames = settings?.roles?.roles ?? []
 
   const knownAnswers = useMemo(() => {
     if (!applicant) return []

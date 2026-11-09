@@ -67,6 +67,9 @@ class Settings:
     ai_model: str = field(default_factory=lambda: os.getenv("AI_MODEL", "deepseek-flash"))
     ai_secret_arn: str = field(default_factory=lambda: os.getenv("AI_SECRET_ARN", ""))
     ai_api_key: str = field(default_factory=lambda: os.getenv("AI_API_KEY", ""))
+    ai_api_keys: str = field(
+        default_factory=lambda: os.getenv("AI_API_KEYS", os.getenv("GEMINI_API_KEYS", os.getenv("GEMINI_API_KEY", "")))
+    )
     ai_timeout_seconds: float = field(default_factory=lambda: env_float("AI_TIMEOUT_SECONDS", 90.0))
     ai_max_retries: int = field(default_factory=lambda: env_int("AI_MAX_RETRIES", 4))
     ai_max_concurrency: int = field(default_factory=lambda: env_int("AI_MAX_CONCURRENCY", 8))

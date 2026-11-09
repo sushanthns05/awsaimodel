@@ -48,33 +48,112 @@ class _RateLimiter:
 _SECRET_CACHE: dict[str, tuple[float, str]] = {}
 
 
-def load_api_key(settings: Settings, explicit: str = "") -> str:
-    if explicit:
-        return explicit
-    if settings.ai_api_key:
-        return settings.ai_api_key
-    if not settings.ai_secret_arn:
-        return ""
-    cached = _SECRET_CACHE.get(settings.ai_secret_arn)
-    if cached and time.time() - cached[0] < 900:
-        return cached[1]
-    try:
-        import boto3
+class KeyPool:
+    """Manages a pool of AI API keys with automatic round-robin, failover and quota exhaustion handling.
+    
+    Supports 1 to N keys (e.g. 6-7 Google AI Studio Gemini API keys). When one key hits rate limits
+    or quota exhaustion, it immediately fails over to the next available key.
+    """
 
-        client = boto3.client("secretsmanager", region_name=settings.region)
-        response = client.get_secret_value(SecretId=settings.ai_secret_arn)
-        raw = response.get("SecretString") or ""
-        try:
-            parsed = json.loads(raw)
-            key = str(parsed.get("api_key") or parsed.get("apiKey") or parsed.get("key") or "")
-        except json.JSONDecodeError:
-            key = raw.strip()
-        if key:
-            _SECRET_CACHE[settings.ai_secret_arn] = (time.time(), key)
-        return key
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Unable to load AI API key from Secrets Manager: %s", type(exc).__name__)
-        return ""
+    def __init__(self, keys: list[str]):
+        self.keys = [k.strip() for k in keys if k and k.strip()]
+        self._index = 0
+        self._lock = threading.Lock()
+        self._exhausted_until: dict[str, float] = {}
+
+    @property
+    def has_keys(self) -> bool:
+        return bool(self.keys)
+
+    @property
+    def count(self) -> int:
+        return len(self.keys)
+
+    def current_key(self) -> str:
+        with self._lock:
+            if not self.keys:
+                return ""
+            now = time.time()
+            for i in range(len(self.keys)):
+                candidate = self.keys[(self._index + i) % len(self.keys)]
+                if self._exhausted_until.get(candidate, 0) < now:
+                    self._index = (self._index + i) % len(self.keys)
+                    return candidate
+            return self.keys[self._index % len(self.keys)]
+
+    def rotate(self, reason: str = "") -> str:
+        with self._lock:
+            if not self.keys:
+                return ""
+            old_key = self.keys[self._index % len(self.keys)]
+            # Place old key on a 60-second cooldown so other keys are tried first
+            self._exhausted_until[old_key] = time.time() + 60.0
+            self._index = (self._index + 1) % len(self.keys)
+            new_key = self.keys[self._index % len(self.keys)]
+            masked_old = old_key[:6] + "..." + old_key[-4:] if len(old_key) > 10 else "***"
+            masked_new = new_key[:6] + "..." + new_key[-4:] if len(new_key) > 10 else "***"
+            logger.warning(
+                "Rotating AI API key due to %s. Switched from %s to %s (key %d of %d)",
+                reason or "quota exhaustion",
+                masked_old,
+                masked_new,
+                (self._index % len(self.keys)) + 1,
+                len(self.keys),
+            )
+            return new_key
+
+
+def _split_keys(raw: str) -> list[str]:
+    import re
+    if not raw:
+        return []
+    parts = re.split(r"[\r\n,;]+", raw)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def load_api_keys(settings: Settings, explicit: str = "") -> list[str]:
+    keys: list[str] = []
+    if explicit:
+        keys.extend(_split_keys(explicit))
+    if settings.ai_api_keys:
+        keys.extend(_split_keys(settings.ai_api_keys))
+    if settings.ai_api_key:
+        keys.extend(_split_keys(settings.ai_api_key))
+
+    if not keys and settings.ai_secret_arn:
+        cached = _SECRET_CACHE.get(settings.ai_secret_arn)
+        if cached and time.time() - cached[0] < 900:
+            keys.extend(_split_keys(cached[1]))
+        else:
+            try:
+                import boto3
+                client = boto3.client("secretsmanager", region_name=settings.region)
+                response = client.get_secret_value(SecretId=settings.ai_secret_arn)
+                raw = response.get("SecretString") or ""
+                try:
+                    parsed = json.loads(raw)
+                    val = str(parsed.get("api_keys") or parsed.get("api_key") or parsed.get("key") or "")
+                except json.JSONDecodeError:
+                    val = raw.strip()
+                if val:
+                    _SECRET_CACHE[settings.ai_secret_arn] = (time.time(), val)
+                    keys.extend(_split_keys(val))
+            except Exception as exc:
+                logger.error("Unable to load AI API keys from Secrets Manager: %s", type(exc).__name__)
+
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            deduped.append(k)
+    return deduped
+
+
+def load_api_key(settings: Settings, explicit: str = "") -> str:
+    keys = load_api_keys(settings, explicit)
+    return keys[0] if keys else ""
 
 
 def _default_transport(url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float) -> tuple[int, str]:
@@ -109,12 +188,38 @@ class AIClient:
     ):
         self.settings = settings or get_settings()
         self.config = config or {}
-        self.base_url = str(self.config.get("base_url") or self.settings.ai_base_url).rstrip("/")
-        self.model = str(self.config.get("model") or self.settings.ai_model)
+        
+        # Load all available keys into failover pool
+        keys = load_api_keys(self.settings, api_key)
+        self.key_pool = KeyPool(keys)
+        self.api_key = self.key_pool.current_key()
+
+        # Base URL and model with auto-detection for Google Gemini
+        raw_base = str(self.config.get("base_url") or self.settings.ai_base_url).rstrip("/")
+        raw_model = str(self.config.get("model") or self.settings.ai_model)
+        provider = str(self.config.get("provider") or self.settings.ai_provider).lower()
+
+        is_gemini = (
+            provider == "gemini"
+            or any(k.startswith("AIzaSy") for k in self.key_pool.keys)
+            or "generativelanguage.googleapis.com" in raw_base
+        )
+
+        if is_gemini and ("deepseek" in raw_base or not raw_base):
+            self.base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+        else:
+            self.base_url = raw_base
+
+        if is_gemini and ("deepseek" in raw_model or not raw_model):
+            self.model = "gemini-1.5-flash"
+        else:
+            self.model = raw_model
+
         self.timeout = float(self.config.get("timeout_seconds") or self.settings.ai_timeout_seconds)
         self.max_retries = int(self.config.get("max_retries") or self.settings.ai_max_retries)
-        self.temperature = float(self.config.get("temperature") if self.config.get("temperature") is not None else self.settings.ai_temperature)
-        self.api_key = load_api_key(self.settings, api_key)
+        self.temperature = float(
+            self.config.get("temperature") if self.config.get("temperature") is not None else self.settings.ai_temperature
+        )
         self.transport = transport or _default_transport
         self.limiter = _RateLimiter(
             rate_per_second=float(self.config.get("rate_per_second", 2.0)),
@@ -123,11 +228,11 @@ class AIClient:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.api_key) and bool(self.config.get("enabled", True))
+        return self.key_pool.has_keys and bool(self.config.get("enabled", True))
 
     def chat(self, messages: list[dict[str, str]], *, response_format: bool = True) -> ChatResult:
-        if not self.api_key:
-            raise UpstreamError("AI provider is not configured (missing API key)")
+        if not self.key_pool.has_keys:
+            raise UpstreamError("AI provider is not configured (missing API keys)")
 
         payload: dict[str, Any] = {
             "model": self.model,
@@ -139,15 +244,18 @@ class AIClient:
             payload["response_format"] = {"type": "json_object"}
 
         url = f"{self.base_url}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
 
         last_error: Optional[Exception] = None
         started = time.monotonic()
-        for attempt in range(1, self.max_retries + 1):
+        total_attempts = max(self.max_retries, self.key_pool.count * 2)
+
+        for attempt in range(1, total_attempts + 1):
+            active_key = self.key_pool.current_key()
+            headers = {
+                "Authorization": f"Bearer {active_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
             self.limiter.acquire()
             try:
                 status, body = self.transport(url, headers, payload, self.timeout)
@@ -157,6 +265,18 @@ class AIClient:
                 self._backoff(attempt)
                 continue
 
+            # Check for quota exhaustion / rate limit across providers (Gemini, DeepSeek, OpenAI)
+            is_exhausted = (
+                status in (429, 403)
+                or (status == 400 and ("RESOURCE_EXHAUSTED" in body or "quota" in body.lower()))
+            )
+
+            if is_exhausted and self.key_pool.count > 1:
+                last_error = UpstreamError(f"AI provider key exhausted/rate-limited (HTTP {status})")
+                self.key_pool.rotate(f"HTTP {status} / quota exhausted on attempt {attempt}")
+                # Immediately retry with the next key in pool
+                continue
+
             if status in (429, 500, 502, 503, 504):
                 last_error = UpstreamError(f"AI provider returned HTTP {status}")
                 logger.warning("AI provider transient failure HTTP %s (attempt %s)", status, attempt)
@@ -164,7 +284,10 @@ class AIClient:
                 continue
 
             if status >= 400:
-                # Do not leak provider error bodies that may contain request data.
+                # If key failed with 401 or 403 and there are more keys, rotate
+                if status in (401, 403) and self.key_pool.count > 1:
+                    self.key_pool.rotate(f"HTTP {status} auth rejection")
+                    continue
                 raise UpstreamError(f"AI provider rejected the request (HTTP {status})")
 
             try:

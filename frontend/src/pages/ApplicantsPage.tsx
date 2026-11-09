@@ -37,7 +37,7 @@ export function ApplicantsPage() {
   const [exporting, setExporting] = useState(false)
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings, staleTime: 300_000 })
-  const roles = settings?.roles.roles ?? []
+  const roles = settings?.roles?.roles ?? []
 
   const filters = useMemo<ApplicantFilters>(
     () => ({

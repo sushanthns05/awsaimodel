@@ -231,3 +231,28 @@ def test_mock_client_produces_valid_evidence_backed_result():
     for criterion in result["criteria"]:
         if criterion["score_fraction"] > 0:
             assert criterion["evidence"]
+
+
+def test_key_pool_failover_rotates_on_quota():
+    from backend.src.ai.client import KeyPool
+    pool = KeyPool(["key1", "key2", "key3"])
+    assert pool.count == 3
+    assert pool.current_key() == "key1"
+    
+    rotated = pool.rotate("quota exceeded")
+    assert rotated == "key2"
+    assert pool.current_key() == "key2"
+    
+    rotated2 = pool.rotate("rate limit 429")
+    assert rotated2 == "key3"
+    assert pool.current_key() == "key3"
+
+
+def test_ai_client_gemini_auto_configuration():
+    from backend.src.common.config import Settings
+    settings = Settings(ai_api_keys="AIzaSyKey1, AIzaSyKey2")
+    client = AIClient(settings=settings)
+    assert client.key_pool.count == 2
+    assert "generativelanguage.googleapis.com" in client.base_url
+    assert "gemini" in client.model
+

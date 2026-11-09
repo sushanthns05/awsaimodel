@@ -5,16 +5,18 @@ import {
   CheckCircle2,
   Cpu,
   FileJson,
+  Globe,
   Loader2,
   PlayCircle,
   Plus,
   Save,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Users,
   Workflow,
 } from 'lucide-react'
-import { api } from '../lib/api'
+import { api, getApiBase, setApiBaseUrl } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { formatDate, humanise } from '../lib/utils'
 import { ErrorState, PageLoader } from '../components/States'
@@ -60,17 +62,21 @@ export function SettingsPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="organization">Organization</TabsTrigger>
+          <TabsTrigger value="backend">Backend service</TabsTrigger>
+          <TabsTrigger value="ai">AI provider</TabsTrigger>
           <TabsTrigger value="mapping">Field mapping</TabsTrigger>
           <TabsTrigger value="eligibility">Eligibility</TabsTrigger>
           <TabsTrigger value="rubric">Rubric</TabsTrigger>
           <TabsTrigger value="roles">Role weights</TabsTrigger>
-          <TabsTrigger value="ai">AI provider</TabsTrigger>
           <TabsTrigger value="processing">Processing</TabsTrigger>
           <TabsTrigger value="administrators">Administrators</TabsTrigger>
         </TabsList>
 
         <TabsContent value="organization">
           <OrganizationTab data={data} readOnly={readOnly} />
+        </TabsContent>
+        <TabsContent value="backend">
+          <BackendTab />
         </TabsContent>
         <TabsContent value="mapping">
           <JsonConfigTab
@@ -291,12 +297,104 @@ function JsonConfigTab({
   )
 }
 
+function BackendTab() {
+  const [currentUrl, setCurrentUrl] = useState(getApiBase())
+  const [testStatus, setTestStatus] = useState<string>('')
+  const [loading, setLoading] = useState(false)
+  const queryClient = useQueryClient()
+
+  async function handleSave() {
+    setApiBaseUrl(currentUrl.trim())
+    setTestStatus('Saved! Re-syncing queries...')
+    await queryClient.invalidateQueries()
+    setTimeout(() => setTestStatus('Connected to backend at: ' + (currentUrl.trim() || '/api')), 1000)
+  }
+
+  async function handleTest() {
+    setLoading(true)
+    setTestStatus('Testing backend reachability...')
+    try {
+      const target = (currentUrl.trim() || '/api').replace(/\/$/, '')
+      const res = await fetch(`${target}/health`, { method: 'GET', headers: { Accept: 'application/json' } })
+      if (res.ok) {
+        const body = await res.json()
+        setTestStatus(`Backend healthy! Service: ${body.service || 'sbg-api'} (Status: ${body.status || 'ok'})`)
+      } else {
+        setTestStatus(`Backend responded with HTTP status ${res.status}`)
+      }
+    } catch (err) {
+      setTestStatus(`Connection failed: ${(err as Error).message}. Check your Render service URL.`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleReset() {
+    setApiBaseUrl('')
+    setCurrentUrl('/api')
+    queryClient.invalidateQueries()
+    setTestStatus('Reset to default /api')
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Globe className="h-4 w-4 text-aws-orange" /> Backend REST Service Connection
+        </CardTitle>
+        <CardDescription>
+          Connect the React dashboard on Firebase to your live FastAPI backend on Render.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {testStatus ? (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-navy-900 font-mono">
+            {testStatus}
+          </div>
+        ) : null}
+
+        <div className="space-y-2">
+          <Label htmlFor="backendUrl">FastAPI Web Service URL (e.g. Render)</Label>
+          <Input
+            id="backendUrl"
+            placeholder="https://sbg-recruitment-api.onrender.com/api"
+            value={currentUrl}
+            onChange={(e) => setCurrentUrl(e.target.value)}
+          />
+          <p className="text-[11px] text-slate-500">
+            Paste your Render Web Service URL here. Example:{' '}
+            <code className="font-mono bg-slate-100 px-1 py-0.5 rounded text-navy-800">
+              https://your-service-name.onrender.com/api
+            </code>
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 pt-2">
+          <Button variant="accent" size="sm" onClick={handleSave}>
+            <Save className="h-3.5 w-3.5" /> Save & Connect
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleTest} disabled={loading}>
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />}
+            Test /health
+          </Button>
+          <Button variant="ghost" size="sm" onClick={handleReset}>
+            Reset Default
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 function AiTab({ data, readOnly }: { data: SettingsPayload; readOnly: boolean }) {
   const queryClient = useQueryClient()
-  const [provider, setProvider] = useState(data.aiPublic.provider)
-  const [model, setModel] = useState(data.aiPublic.model)
-  const [baseUrl, setBaseUrl] = useState(data.aiPublic.baseUrl)
+  const [provider, setProvider] = useState(data.aiPublic.provider || 'gemini')
+  const [model, setModel] = useState(data.aiPublic.model || 'gemini-1.5-flash')
+  const [baseUrl, setBaseUrl] = useState(data.aiPublic.baseUrl || 'https://generativelanguage.googleapis.com/v1beta/openai')
   const [enabled, setEnabled] = useState(data.aiPublic.enabled)
+  const [geminiKeys, setGeminiKeys] = useState(() => {
+    return localStorage.getItem('sbg_gemini_keys') || ''
+  })
   const [temperature, setTemperature] = useState(String(data.aiPublic.temperature))
   const [timeoutSeconds, setTimeoutSeconds] = useState(String(data.aiPublic.timeoutSeconds))
   const [maxRetries, setMaxRetries] = useState(String(data.aiPublic.maxRetries))
@@ -304,9 +402,32 @@ function AiTab({ data, readOnly }: { data: SettingsPayload; readOnly: boolean })
   const [error, setError] = useState('')
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string; model?: string; latencyMs?: number } | null>(null)
 
+  const parsedKeyCount = useMemo(() => {
+    if (!geminiKeys) return 0
+    return geminiKeys
+      .split(/[\r\n,;]+/)
+      .map((k) => k.trim())
+      .filter(Boolean).length
+  }, [geminiKeys])
+
+  function selectGeminiPreset() {
+    setProvider('gemini')
+    setModel('gemini-1.5-flash')
+    setBaseUrl('https://generativelanguage.googleapis.com/v1beta/openai')
+    setMessage('Loaded Google Gemini (Google AI Studio) preset.')
+  }
+
+  function selectDeepSeekPreset() {
+    setProvider('deepseek')
+    setModel('deepseek-chat')
+    setBaseUrl('https://api.deepseek.com/v1')
+    setMessage('Loaded DeepSeek preset.')
+  }
+
   const saveMutation = useMutation({
-    mutationFn: () =>
-      api.updateSettings('ai', {
+    mutationFn: () => {
+      localStorage.setItem('sbg_gemini_keys', geminiKeys.trim())
+      return api.updateSettings('ai', {
         provider,
         model,
         base_url: baseUrl,
@@ -314,9 +435,11 @@ function AiTab({ data, readOnly }: { data: SettingsPayload; readOnly: boolean })
         temperature: Number(temperature),
         timeout_seconds: Number(timeoutSeconds),
         max_retries: Number(maxRetries),
-      }),
+        gemini_api_keys: geminiKeys.trim(),
+      })
+    },
     onSuccess: () => {
-      setMessage('AI settings saved. The API key is managed in AWS Secrets Manager and never exposed here.')
+      setMessage(`AI settings saved. Key rotation pool configured with ${parsedKeyCount} keys.`)
       setError('')
       void queryClient.invalidateQueries({ queryKey: ['settings'] })
     },
@@ -333,19 +456,65 @@ function AiTab({ data, readOnly }: { data: SettingsPayload; readOnly: boolean })
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Cpu className="h-4 w-4 text-aws-orange" /> AI provider configuration
+          <Cpu className="h-4 w-4 text-aws-orange" /> AI Provider & Multi-Key Failover Pool
         </CardTitle>
         <CardDescription>
-          The model only proposes evidence-backed score fractions. Python validates each value and computes final marks. The API key is read
-          from AWS Secrets Manager at runtime.
+          Supports automatic failover across 6 to 7 Gemini API keys from Google AI Studio. When any key hits rate limits or free-tier quota, the engine rolls over to the next key seamlessly.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {message ? <Banner tone="success" message={message} /> : null}
         {error ? <Banner tone="error" message={error} /> : null}
         {testResult ? (
-          <Banner tone={testResult.ok ? 'success' : 'error'} message={`${testResult.message}${testResult.latencyMs ? ` (${testResult.latencyMs} ms)` : ''}`} />
+          <Banner
+            tone={testResult.ok ? 'success' : 'error'}
+            message={`${testResult.message}${testResult.latencyMs ? ` (${testResult.latencyMs} ms)` : ''}`}
+          />
         ) : null}
+
+        <div className="flex flex-wrap items-center gap-2 pb-2">
+          <span className="text-xs text-slate-500 font-medium">Quick Presets:</span>
+          <Button
+            type="button"
+            variant={provider === 'gemini' ? 'accent' : 'outline'}
+            size="sm"
+            className="h-7 text-xs"
+            onClick={selectGeminiPreset}
+          >
+            <Sparkles className="h-3 w-3" /> Google Gemini (Recommended)
+          </Button>
+          <Button
+            type="button"
+            variant={provider === 'deepseek' ? 'accent' : 'outline'}
+            size="sm"
+            className="h-7 text-xs"
+            onClick={selectDeepSeekPreset}
+          >
+            DeepSeek V4.1 Flash
+          </Button>
+        </div>
+
+        <div className="rounded-lg border border-aws-orange/30 bg-amber-50/50 p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <Label className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5 text-aws-orange" />
+              Gemini API Keys Failover Pool (Google AI Studio)
+            </Label>
+            <span className="rounded-full bg-amber-200/80 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+              {parsedKeyCount} active {parsedKeyCount === 1 ? 'key' : 'keys'} in pool
+            </span>
+          </div>
+          <p className="text-[11px] text-amber-900/80">
+            Paste multiple Gemini keys below (one per line or comma-separated). The engine rotates through this pool automatically:
+          </p>
+          <Textarea
+            rows={4}
+            placeholder={`AIzaSyExampleKey1...&#10;AIzaSyExampleKey2...&#10;AIzaSyExampleKey3...`}
+            value={geminiKeys}
+            onChange={(e) => setGeminiKeys(e.target.value)}
+            className="font-mono text-xs bg-white border-amber-300"
+          />
+        </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1">
@@ -362,15 +531,37 @@ function AiTab({ data, readOnly }: { data: SettingsPayload; readOnly: boolean })
           </div>
           <div className="space-y-1">
             <Label>Temperature</Label>
-            <Input type="number" step={0.1} min={0} max={2} value={temperature} disabled={readOnly} onChange={(event) => setTemperature(event.target.value)} />
+            <Input
+              type="number"
+              step={0.1}
+              min={0}
+              max={2}
+              value={temperature}
+              disabled={readOnly}
+              onChange={(event) => setTemperature(event.target.value)}
+            />
           </div>
           <div className="space-y-1">
             <Label>Timeout (seconds)</Label>
-            <Input type="number" min={10} max={300} value={timeoutSeconds} disabled={readOnly} onChange={(event) => setTimeoutSeconds(event.target.value)} />
+            <Input
+              type="number"
+              min={10}
+              max={300}
+              value={timeoutSeconds}
+              disabled={readOnly}
+              onChange={(event) => setTimeoutSeconds(event.target.value)}
+            />
           </div>
           <div className="space-y-1">
             <Label>Max retries</Label>
-            <Input type="number" min={0} max={8} value={maxRetries} disabled={readOnly} onChange={(event) => setMaxRetries(event.target.value)} />
+            <Input
+              type="number"
+              min={0}
+              max={8}
+              value={maxRetries}
+              disabled={readOnly}
+              onChange={(event) => setMaxRetries(event.target.value)}
+            />
           </div>
           <div className="space-y-1">
             <Label>Provider enabled</Label>
@@ -384,11 +575,17 @@ function AiTab({ data, readOnly }: { data: SettingsPayload; readOnly: boolean })
         <div className="flex flex-wrap items-center gap-2">
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-              data.aiPublic.apiKeyConfigured ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'
+              parsedKeyCount > 0 || data.aiPublic.apiKeyConfigured
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'bg-amber-50 text-amber-800'
             }`}
           >
             <ShieldCheck className="h-3.5 w-3.5" />
-            {data.aiPublic.apiKeyConfigured ? 'API key configured in Secrets Manager' : 'API key not configured'}
+            {parsedKeyCount > 0
+              ? `${parsedKeyCount} Gemini keys configured in failover pool`
+              : data.aiPublic.apiKeyConfigured
+                ? 'API key configured in Secrets Manager'
+                : 'API key not configured'}
           </span>
           {data.environment.localMode ? (
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">Local mock mode</span>
@@ -401,7 +598,7 @@ function AiTab({ data, readOnly }: { data: SettingsPayload; readOnly: boolean })
           </Button>
           <Button variant="outline" size="sm" disabled={testMutation.isPending} onClick={() => testMutation.mutate()}>
             {testMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />}
-            Test connection
+            Test multi-key failover
           </Button>
         </div>
       </CardContent>

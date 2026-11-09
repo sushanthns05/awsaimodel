@@ -2,7 +2,6 @@ import { FormEvent, useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AlertCircle, ArrowRight, CheckCircle2, Cloud, Loader2, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
-import { cognitoConfigured, isDevAuth } from '../lib/auth'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
@@ -12,8 +11,8 @@ export function LoginPage() {
   const { login, user, loading, error } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const [email, setEmail] = useState('admin@sjbit.edu.in')
-  const [password, setPassword] = useState('Admin@2026')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [localError, setLocalError] = useState('')
 
@@ -104,7 +103,7 @@ export function LoginPage() {
             <CardHeader>
               <CardTitle className="text-xl">Administrator sign in</CardTitle>
               <CardDescription>
-                Use your Cognito account. Access is limited to recruitment administrators, reviewers and viewers.
+                Access is limited to recruitment administrators, reviewers and viewers.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -146,27 +145,6 @@ export function LoginPage() {
                   {submitting ? 'Signing in…' : 'Sign in'}
                   {!submitting ? <ArrowRight className="h-4 w-4" /> : null}
                 </Button>
-
-                {!cognitoConfigured() ? (
-                  <div className="rounded-lg border border-aws-orange/30 bg-amber-50/70 p-3 text-xs text-amber-900">
-                    <p className="font-semibold text-amber-950 flex items-center gap-1.5">
-                      <Sparkles className="h-3.5 w-3.5 text-aws-orange" /> Default Administrator Access:
-                    </p>
-                    <div className="mt-1.5 space-y-1 font-mono text-[11px] text-slate-700 bg-white/80 p-2 rounded border border-amber-200/60">
-                      <div><strong className="text-slate-500 font-sans">Email:</strong> admin@sjbit.edu.in</div>
-                      <div><strong className="text-slate-500 font-sans">Password:</strong> Admin@2026</div>
-                    </div>
-                    <p className="mt-1.5 text-[10px] text-amber-800/80">
-                      Pre-filled for demonstration. Click <strong>Sign in</strong> to access the dashboard.
-                    </p>
-                  </div>
-                ) : null}
-                {isDevAuth() ? (
-                  <p className="rounded-md bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
-                    Local development mode is active. The API accepts a development administrator identity — never enable
-                    this in production.
-                  </p>
-                ) : null}
               </form>
             </CardContent>
           </Card>

@@ -1,12 +1,13 @@
 import { getValidToken, refreshSession } from './auth'
 import {
-  mockApplicantDetail,
-  mockApplicantsList,
-  mockOverview,
+  getMockApplicantDetail,
+  getMockApplicantsList,
+  getMockOverview,
+  getMockShortlist,
   mockReportsList,
   mockSettings,
-  mockShortlist,
 } from './mockData'
+import { importGoogleFormResponses, parseCSV } from './googleSync'
 import type {
   AdminList,
   ApplicantDetail,
@@ -62,7 +63,16 @@ interface RequestOptions {
 
 function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | undefined {
   _isDemoMode = true
-  if (path.startsWith('/dashboard/overview')) return mockOverview as unknown as T
+  if (path.startsWith('/dashboard/overview')) return getMockOverview() as unknown as T
+  if (path.startsWith('/intake/upload-csv')) {
+    const b = (body as { csv_text?: string }) || {}
+    const records = parseCSV(b.csv_text || '')
+    const result = importGoogleFormResponses(records)
+    return { total_rows: result.totalRows, imported: result.imported, skipped_duplicates: 0 } as unknown as T
+  }
+  if (path.startsWith('/intake/sync-sheet')) {
+    return { total_rows: 0, imported: 0, skipped_duplicates: 0, message: 'Synced' } as unknown as T
+  }
   if (path.startsWith('/applicants/') && path.includes('/review')) {
     const b = (body as Record<string, string>) || {}
     return { applicantId: 'AWS-2026-001', reviewStatus: b.decision || 'APPROVED', decision: b.decision || 'APPROVED' } as unknown as T
@@ -70,20 +80,24 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
   if (path.startsWith('/applicants/') && path.includes('/url')) {
     return { url: '#', filename: 'Resume.pdf', expiresInSeconds: 900 } as unknown as T
   }
-  if (path.startsWith('/applicants/')) return mockApplicantDetail as unknown as T
+  if (path.startsWith('/applicants/')) {
+    const id = decodeURIComponent(path.replace('/applicants/', '').split('/')[0])
+    return getMockApplicantDetail(id) as unknown as T
+  }
   if (path.startsWith('/applicants')) {
+    const items = getMockApplicantsList()
     return {
-      items: mockApplicantsList,
+      items,
       nextCursor: null,
       pageSize: 25,
-      count: mockApplicantsList.length,
+      count: items.length,
     } as unknown as T
   }
   if (path.startsWith('/shortlist/bulk')) {
     const b = (body as { applicantIds?: string[]; decision?: string }) || {}
     return { updated: b.applicantIds || [], skipped: [], decision: b.decision || 'APPROVED' } as unknown as T
   }
-  if (path.startsWith('/shortlist')) return mockShortlist as unknown as T
+  if (path.startsWith('/shortlist')) return getMockShortlist() as unknown as T
   if (path.startsWith('/reports/generate')) {
     return {
       report_id: `REP-${Date.now()}`,
@@ -305,4 +319,16 @@ export const api = {
 
   removeAdmin: (body: { email: string; group: string }) =>
     request<{ status: string; email: string; group: string }>('/admins', { method: 'DELETE', body }),
+
+  syncGoogleSheet: (sheetUrl: string) =>
+    request<{ total_rows: number; imported: number; skipped_duplicates: number }>('/intake/sync-sheet', {
+      method: 'POST',
+      body: { sheet_url: sheetUrl },
+    }),
+
+  importCsvResponses: (csvText: string) =>
+    request<{ total_rows: number; imported: number; skipped_duplicates: number }>('/intake/upload-csv', {
+      method: 'POST',
+      body: { csv_text: csvText },
+    }),
 }

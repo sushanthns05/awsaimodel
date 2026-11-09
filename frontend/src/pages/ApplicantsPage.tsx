@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Download, Filter, Search, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Filter, Search, Sparkles, X } from 'lucide-react'
 import { api, type ApplicantFilters } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
@@ -13,6 +13,7 @@ import { Input } from '../components/ui/input'
 import { Select } from '../components/ui/select'
 import { Label } from '../components/ui/label'
 import { ScoreBadge, RecommendationBadge, StatusBadge, EligibilityBadge, ReviewBadge } from '../components/StatusBadges'
+import { GoogleFormSyncDialog } from '../components/GoogleFormSyncDialog'
 
 const STATUSES = ['RECEIVED', 'QUEUED', 'EXTRACTING', 'EXTRACTED', 'EVALUATING', 'SCORING', 'COMPLETED', 'NEEDS_REVIEW', 'FAILED']
 const RECOMMENDATIONS = ['STRONG_INTERVIEW', 'INTERVIEW_CONSIDERATION', 'MANUAL_REVIEW', 'ELIGIBILITY_REVIEW', 'NEEDS_REVIEW']
@@ -35,6 +36,7 @@ export function ApplicantsPage() {
   const [cursor, setCursor] = useState('')
   const [history, setHistory] = useState<string[]>([])
   const [exporting, setExporting] = useState(false)
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false)
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings, staleTime: 300_000 })
   const roles = settings?.roles?.roles ?? []
@@ -110,11 +112,16 @@ export function ApplicantsPage() {
             Search, filter and inspect every application. AI scores are recommendations pending human review.
           </p>
         </div>
-        {can('reports') ? (
-          <Button variant="accent" size="sm" onClick={() => void exportExcel()} disabled={exporting}>
-            <Download className="h-3.5 w-3.5" /> {exporting ? 'Preparing…' : 'Export Excel'}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="accent" size="sm" onClick={() => setSyncDialogOpen(true)}>
+            <Sparkles className="h-3.5 w-3.5" /> Sync Form Responses
           </Button>
-        ) : null}
+          {can('reports') ? (
+            <Button variant="outline" size="sm" onClick={() => void exportExcel()} disabled={exporting}>
+              <Download className="h-3.5 w-3.5" /> {exporting ? 'Preparing…' : 'Export Excel'}
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <Card>
@@ -322,6 +329,8 @@ export function ApplicantsPage() {
         Scores are calculated from AI-proposed evidence-backed fractions using the active rubric ({settings?.rubric?.version ? String(settings.rubric.version) : '1.0.0'}).
         Average score is {formatScore(data?.items.reduce((sum, item) => sum + item.totalScore, 0) ?? 0)} on this page.
       </p>
+
+      <GoogleFormSyncDialog open={syncDialogOpen} onOpenChange={setSyncDialogOpen} />
     </div>
   )
 }

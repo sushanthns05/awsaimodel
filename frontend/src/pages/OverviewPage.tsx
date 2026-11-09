@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   ArrowUpRight,
@@ -12,7 +13,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, isUsingDemoFallback } from '../lib/api'
+import { api } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { formatDate, formatScore, initials } from '../lib/utils'
 import { PageLoader, ErrorState, EmptyState } from '../components/States'
@@ -21,10 +22,12 @@ import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { ScoreBadge, RecommendationBadge, StatusBadge } from '../components/StatusBadges'
 import { ScoreDistributionChart, ProcessingDonut, RoleBarChart } from '../components/charts/Charts'
+import { GoogleFormSyncDialog } from '../components/GoogleFormSyncDialog'
 
 export function OverviewPage() {
   const { can } = useAuth()
   const navigate = useNavigate()
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false)
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['overview'],
     queryFn: api.overview,
@@ -60,19 +63,17 @@ export function OverviewPage() {
 
   return (
     <div className="space-y-6">
-      {isUsingDemoFallback() ? (
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-lg border border-aws-orange/40 bg-amber-50/80 px-4 py-2.5 text-xs text-amber-950">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-aws-orange shrink-0" />
-            <span>
-              <strong>Sample Data Mode</strong>: Displaying SJBIT 2026–27 recruitment dataset. Connect your Render FastAPI URL in Settings anytime.
-            </span>
-          </div>
-          <Button variant="outline" size="sm" className="h-7 text-xs border-amber-300 bg-white shrink-0" onClick={() => navigate('/settings')}>
-            Backend Settings
-          </Button>
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-lg border border-aws-orange/40 bg-amber-50/80 px-4 py-2.5 text-xs text-amber-950">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-aws-orange shrink-0" />
+          <span>
+            <strong>Connected Google Form</strong>: AWS Student Builder Group SJBIT Recruitment 2026-27.
+          </span>
         </div>
-      ) : null}
+        <Button variant="accent" size="sm" className="h-7 text-xs shrink-0" onClick={() => setSyncDialogOpen(true)}>
+          <Sparkles className="h-3 w-3 mr-1" /> Sync Form Responses
+        </Button>
+      </div>
 
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div>
@@ -83,6 +84,9 @@ export function OverviewPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button variant="accent" size="sm" onClick={() => setSyncDialogOpen(true)}>
+            <Sparkles className="h-3.5 w-3.5" /> Sync Responses
+          </Button>
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} /> Refresh
           </Button>
@@ -90,12 +94,38 @@ export function OverviewPage() {
             <Users className="h-3.5 w-3.5" /> View applicants
           </Button>
           {can('reports') ? (
-            <Button variant="accent" size="sm" onClick={() => void exportExcel()}>
+            <Button variant="outline" size="sm" onClick={() => void exportExcel()}>
               <Download className="h-3.5 w-3.5" /> Export Excel
             </Button>
           ) : null}
         </div>
       </div>
+
+      {stats.totalApplications === 0 ? (
+        <Card className="border-dashed border-2 border-slate-300 bg-slate-50/50 p-8 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-aws-orange/10 text-aws-orange">
+            <Sparkles className="h-6 w-6" />
+          </div>
+          <h3 className="mt-4 text-base font-bold text-navy-950">Awaiting Google Form Submissions</h3>
+          <p className="mx-auto mt-2 max-w-md text-xs text-slate-500 leading-relaxed">
+            Connected to <strong>AWS Student Builder Group SJBIT Recruitment 2026-27</strong>.
+            Click below to sync responses directly from your Google Sheet or upload the responses CSV file.
+          </p>
+          <div className="mt-5 flex justify-center gap-3">
+            <Button variant="accent" onClick={() => setSyncDialogOpen(true)}>
+              <Sparkles className="h-4 w-4 mr-1.5" /> Sync Google Form Responses
+            </Button>
+            <a
+              href="https://docs.google.com/forms/d/e/1FAIpQLSch2mAwHMWOf6_AUcTYNJRHA2GwZ2t8Xrv41hbSEC8gVsTB7w/viewform"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center text-xs font-semibold text-slate-600 hover:text-navy-900 border px-3 py-2 rounded-md bg-white shadow-sm"
+            >
+              Open Live Form <ArrowUpRight className="h-3.5 w-3.5 ml-1" />
+            </a>
+          </div>
+        </Card>
+      ) : null}
 
       {data.truncated ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
@@ -242,6 +272,8 @@ export function OverviewPage() {
           </CardContent>
         </Card>
       </div>
+
+      <GoogleFormSyncDialog open={syncDialogOpen} onOpenChange={setSyncDialogOpen} />
     </div>
   )
 }

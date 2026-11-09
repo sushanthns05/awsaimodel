@@ -1,0 +1,1091 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AWS Student Builder Group (SJBIT) AI recruitment and shortlisting platform.
+  Google Form intake -> S3/DynamoDB/SQS/Step Functions -> evidence-backed AI
+  evaluation -> deterministic Python scoring -> reports -> React dashboard.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment stage. Use prod for the live recruitment cycle.
+
+  AiApiKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: >
+      DeepSeek API key. Stored in AWS Secrets Manager. Leave empty to deploy
+      without AI credentials (evaluations fail closed until it is configured).
+
+  AiBaseUrl:
+    Type: String
+    Default: https://api.deepseek.com/v1
+    Description: OpenAI-compatible base URL for the AI provider.
+
+  AiModel:
+    Type: String
+    Default: deepseek-flash
+    Description: Model identifier sent to the provider.
+
+  IntakeKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    MinLength: 0
+    Description: >
+      Shared key used by the Google Apps Script bridge. Stored in Secrets
+      Manager. Must match the value configured in Apps Script.
+
+  CorsOrigin:
+    Type: String
+    Default: '*'
+    Description: >
+      Allowed browser origin for the dashboard (for example
+      https://recruitment.example.edu). Use a specific origin in production.
+
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: Optional email address subscribed to CloudWatch alarm notifications.
+
+  TextractEnabled:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Enable Amazon Textract OCR fallback for scanned resumes.
+
+  MalwareScanEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Fail closed unless a malware scanning Lambda is configured. Keep false
+      only until the scanner is deployed.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    MinValue: 7
+    MaxValue: 3653
+    Description: CloudWatch Logs retention for Lambda and Step Functions logs.
+
+Conditions:
+  HasAiApiKey: !Not [!Equals [!Ref AiApiKey, '']]
+  HasIntakeKey: !Not [!Equals [!Ref IntakeKey, '']]
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [x86_64]
+    MemorySize: 1024
+    Timeout: 60
+    Tracing: Active
+    Layers:
+      - !Ref DependenciesLayer
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Stage
+        STAGE: !Ref Stage
+        USE_LOCAL_STORE: 'false'
+        AUTH_DISABLED: 'false'
+        INTAKE_SIGNATURE_REQUIRED: 'true'
+        INTAKE_SIGNATURE_TOLERANCE_SECONDS: '900'
+        APPLICANTS_TABLE: !Ref ApplicantsTable
+        EVALUATIONS_TABLE: !Ref EvaluationsTable
+        AUDIT_TABLE: !Ref AuditTable
+        CONFIG_TABLE: !Ref ConfigTable
+        REPORTS_TABLE: !Ref ReportsTable
+        RESUME_BUCKET: !Ref ResumeBucket
+        REPORT_BUCKET: !Ref ReportBucket
+        AI_PROVIDER: deepseek
+        AI_BASE_URL: !Ref AiBaseUrl
+        AI_MODEL: !Ref AiModel
+        AI_TIMEOUT_SECONDS: '90'
+        AI_MAX_RETRIES: '4'
+        AI_MAX_CONCURRENCY: '8'
+        AI_TEMPERATURE: '0.1'
+        AI_MAX_INPUT_CHARS: '60000'
+        AI_SECRET_ARN: !If [HasAiApiKey, !Ref AiSecret, '']
+        INTAKE_SECRET_ARN: !If [HasIntakeKey, !Ref IntakeSecret, '']
+        MAX_SUBMISSION_BYTES: '8000000'
+        MAX_DOCUMENT_BYTES: '6000000'
+        MAX_DOCUMENTS: '8'
+        TEXTRACT_ENABLED: !Ref TextractEnabled
+        MALWARE_SCAN_ENABLED: !Ref MalwareScanEnabled
+        MALWARE_SCAN_LAMBDA: ''
+        COGNITO_USER_POOL_ID: !Ref UserPool
+        COGNITO_CLIENT_ID: !Ref UserPoolClient
+        COGNITO_REGION: !Ref AWS::Region
+        REPORT_SIGNED_URL_SECONDS: '900'
+        DOCUMENT_SIGNED_URL_SECONDS: '300'
+        CORS_ORIGIN: !Ref CorsOrigin
+        ORG_NAME: AWS Student Builder Group
+        INSTITUTION: SJB Institute of Technology
+        RECRUITMENT_CYCLE: '2026-27'
+        LOG_LEVEL: INFO
+        LOG_FORMAT: json
+
+Resources:
+  # -------------------------------------------------------------------------
+  # Shared dependencies layer
+  # -------------------------------------------------------------------------
+  DependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub '${AWS::StackName}-python-deps'
+      Description: PyMuPDF, python-docx, Pillow, openpyxl, reportlab, PyJWT and boto3
+      ContentUri: backend/
+      CompatibleRuntimes: [python3.12]
+      CompatibleArchitectures: [x86_64]
+      RetentionPolicy: Retain
+    Metadata:
+      BuildMethod: python3.12
+      BuildArchitecture: x86_64
+
+  # -------------------------------------------------------------------------
+  # Data stores
+  # -------------------------------------------------------------------------
+  ApplicantsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${AWS::StackName}-applicants'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+      Tags:
+        - { Key: Application, Value: sbg-recruitment }
+
+  EvaluationsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${AWS::StackName}-evaluations'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  AuditTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${AWS::StackName}-audit'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  ConfigTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${AWS::StackName}-config'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  ReportsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${AWS::StackName}-reports'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  ResumeBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-resumes
+            Status: Enabled
+            ExpirationInDays: 400
+            NoncurrentVersionExpirationInDays: 30
+            ExpiredObjectDeleteMarker: true
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+      Tags:
+        - { Key: Application, Value: sbg-recruitment }
+
+  ReportBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-reports
+            Status: Enabled
+            ExpirationInDays: 730
+            NoncurrentVersionExpirationInDays: 60
+            ExpiredObjectDeleteMarker: true
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+      Tags:
+        - { Key: Application, Value: sbg-recruitment }
+
+  ResumeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ResumeBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ResumeBucket.Arn
+              - !Sub '${ResumeBucket.Arn}/*'
+            Condition:
+              Bool: { 'aws:SecureTransport': 'false' }
+
+  ReportBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ReportBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ReportBucket.Arn
+              - !Sub '${ReportBucket.Arn}/*'
+            Condition:
+              Bool: { 'aws:SecureTransport': 'false' }
+
+  # -------------------------------------------------------------------------
+  # Secrets
+  # -------------------------------------------------------------------------
+  AiSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: HasAiApiKey
+    Properties:
+      Name: !Sub '${AWS::StackName}/ai-api-key'
+      Description: DeepSeek API key used by the evaluation worker
+      SecretString: !Ref AiApiKey
+      Tags:
+        - { Key: Application, Value: sbg-recruitment }
+
+  IntakeSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: HasIntakeKey
+    Properties:
+      Name: !Sub '${AWS::StackName}/intake-key'
+      Description: Shared key used by the Google Apps Script intake bridge
+      SecretString: !Ref IntakeKey
+      Tags:
+        - { Key: Application, Value: sbg-recruitment }
+
+  AppSecretsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${AWS::StackName}-secrets-read'
+      Description: Read this stack's Secrets Manager secrets only
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [secretsmanager:GetSecretValue, secretsmanager:DescribeSecret]
+            Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AWS::StackName}/*'
+
+  # -------------------------------------------------------------------------
+  # Queues
+  # -------------------------------------------------------------------------
+  ProcessingDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-processing-dlq'
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  ProcessingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-processing'
+      VisibilityTimeout: 360
+      MessageRetentionPeriod: 345600
+      ReceiveMessageWaitTimeSeconds: 20
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ProcessingDeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  # -------------------------------------------------------------------------
+  # Cognito (dashboard users)
+  # -------------------------------------------------------------------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}-users'
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: 'OPTIONAL'
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+        UnusedAccountValidityDays: 7
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - { Name: verified_email, Priority: 1 }
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 3
+      Schema:
+        - { Name: email, AttributeDataType: String, Required: true, Mutable: true }
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate: [email]
+      Tags:
+        - { Key: Application, Value: sbg-recruitment }
+
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: sbg-admins
+      Description: Full access, configuration and administrator management
+      Precedence: 1
+
+  ReviewerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: sbg-reviewers
+      Description: Read, review, score, shortlist and export reports
+      Precedence: 2
+
+  ViewerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: sbg-viewers
+      Description: Read-only access
+      Precedence: 3
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub '${AWS::StackName}-dashboard'
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      SupportedIdentityProviders: [COGNITO]
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+
+  # -------------------------------------------------------------------------
+  # Processing state machine
+  # -------------------------------------------------------------------------
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/vendedlogs/states/${AWS::StackName}-processing'
+      RetentionInDays: !Ref LogRetentionDays
+
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: states.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: invoke-processing-workers
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt ExtractFunction.Arn
+                  - !GetAtt EvaluateFunction.Arn
+                  - !GetAtt ScoreFunction.Arn
+                  - !GetAtt MarkFailedFunction.Arn
+        - PolicyName: write-execution-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: '*'
+
+  ProcessingStateMachine:
+    Type: AWS::Serverless::StateMachine
+    DependsOn: StateMachineLogGroup
+    Properties:
+      Name: !Sub '${AWS::StackName}-processing'
+      Type: STANDARD
+      Role: !GetAtt StateMachineRole.Arn
+      Tracing: { Enabled: true }
+      Logging:
+        Level: ALL
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !Sub '${StateMachineLogGroup.Arn}:*'
+      DefinitionString: !Sub
+        - |
+          {
+            "Comment": "Extract documents, evaluate with AI, then compute deterministic scores.",
+            "StartAt": "ExtractDocuments",
+            "TimeoutSeconds": 900,
+            "States": {
+              "ExtractDocuments": {
+                "Type": "Task",
+                "Resource": "${ExtractArn}",
+                "TimeoutSeconds": 300,
+                "Retry": [
+                  {
+                    "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                    "IntervalSeconds": 2,
+                    "MaxAttempts": 3,
+                    "BackoffRate": 2.0
+                  }
+                ],
+                "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "MarkFailed" }],
+                "Next": "EvaluateApplicant"
+              },
+              "EvaluateApplicant": {
+                "Type": "Task",
+                "Resource": "${EvaluateArn}",
+                "TimeoutSeconds": 180,
+                "Retry": [
+                  {
+                    "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                    "IntervalSeconds": 5,
+                    "MaxAttempts": 2,
+                    "BackoffRate": 2.0
+                  }
+                ],
+                "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "MarkFailed" }],
+                "Next": "ScoreApplicant"
+              },
+              "ScoreApplicant": {
+                "Type": "Task",
+                "Resource": "${ScoreArn}",
+                "TimeoutSeconds": 120,
+                "Retry": [
+                  {
+                    "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                    "IntervalSeconds": 2,
+                    "MaxAttempts": 3,
+                    "BackoffRate": 2.0
+                  }
+                ],
+                "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "MarkFailed" }],
+                "End": true
+              },
+              "MarkFailed": {
+                "Type": "Task",
+                "Resource": "${MarkFailedArn}",
+                "TimeoutSeconds": 60,
+                "End": true
+              }
+            }
+          }
+        - ExtractArn: !GetAtt ExtractFunction.Arn
+          EvaluateArn: !GetAtt EvaluateFunction.Arn
+          ScoreArn: !GetAtt ScoreFunction.Arn
+          MarkFailedArn: !GetAtt MarkFailedFunction.Arn
+
+  # -------------------------------------------------------------------------
+  # Admin API
+  # -------------------------------------------------------------------------
+  AdminHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Description: SBG recruitment admin API
+      CorsConfiguration:
+        AllowOrigins: [!Ref CorsOrigin]
+        AllowHeaders: [Authorization, Content-Type, X-Intake-Key, X-Signature, X-Timestamp]
+        AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        MaxAge: 600
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+        ThrottlingBurstLimit: 200
+        ThrottlingRateLimit: 100
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '$context.requestId $context.routeKey $context.status $context.responseLatency'
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+              audience: [!Ref UserPoolClient]
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-access'
+      RetentionInDays: !Ref LogRetentionDays
+
+  AdminApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-api'
+      Description: Admin API router (applicants, shortlist, reports, settings)
+      CodeUri: backend/
+      Handler: src.handlers.admin_api.lambda_handler
+      MemorySize: 1024
+      Timeout: 29
+      ReservedConcurrentExecutions: 50
+      Environment:
+        Variables:
+          REPORTS_WORKER_FUNCTION: !Ref ReportsFunction
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref ApplicantsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref EvaluationsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref AuditTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConfigTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ReportsTable }
+        - S3CrudPolicy: { BucketName: !Ref ResumeBucket }
+        - S3CrudPolicy: { BucketName: !Ref ReportBucket }
+        - SQSSendMessagePolicy: { QueueName: !GetAtt ProcessingQueue.QueueName }
+        - LambdaInvokePolicy: { FunctionName: !Ref ReportsFunction }
+        - !Ref AppSecretsPolicy
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:ListUsersInGroup
+                - cognito-idp:ListUsers
+                - cognito-idp:AdminAddUserToGroup
+                - cognito-idp:AdminRemoveUserFromGroup
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        Health:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /health, Method: GET, Auth: { Authorizer: NONE } }
+        Me:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /me, Method: GET }
+        Overview:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /dashboard/overview, Method: GET }
+        Applicants:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /applicants, Method: GET }
+        ApplicantDetail:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /applicants/{id}, Method: GET }
+        ApplicantErase:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /applicants/{id}, Method: DELETE }
+        DocumentUrl:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: '/applicants/{id}/documents/{documentId}/url', Method: GET }
+        ApplicantReview:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /applicants/{id}/review, Method: POST }
+        ApplicantOverride:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /applicants/{id}/evaluation, Method: PATCH }
+        ApplicantReprocess:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /applicants/{id}/reprocess, Method: POST }
+        ApplicantAudit:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /applicants/{id}/audit, Method: GET }
+        Shortlist:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /shortlist, Method: GET }
+        ShortlistBulk:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /shortlist/bulk, Method: POST }
+        Reports:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /reports, Method: GET }
+        ReportDetail:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /reports/{id}, Method: GET }
+        ReportDownload:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: '/reports/{id}/download', Method: GET }
+        ReportGenerate:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /reports/generate, Method: POST }
+        Settings:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /settings, Method: GET }
+        SettingsUpdate:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /settings/{section}, Method: PUT }
+        AiTest:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /settings/ai/test, Method: POST }
+        Admins:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /admins, Method: GET }
+        AdminAdd:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /admins, Method: POST }
+        AdminRemove:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /admins, Method: DELETE }
+        FormMapping:
+          Type: HttpApi
+          Properties: { ApiId: !Ref AdminHttpApi, Path: /form/mapping, Method: GET }
+
+  # -------------------------------------------------------------------------
+  # Google Apps Script intake
+  # -------------------------------------------------------------------------
+  IntakeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-intake'
+      Description: Google Apps Script intake endpoint (HMAC authenticated)
+      CodeUri: backend/
+      Handler: src.handlers.intake.lambda_handler
+      MemorySize: 1024
+      Timeout: 29
+      ReservedConcurrentExecutions: 25
+      Environment:
+        Variables:
+          PROCESSING_QUEUE_URL: !Ref ProcessingQueue
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref ApplicantsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref AuditTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConfigTable }
+        - S3CrudPolicy: { BucketName: !Ref ResumeBucket }
+        - SQSSendMessagePolicy: { QueueName: !GetAtt ProcessingQueue.QueueName }
+        - !Ref AppSecretsPolicy
+      Events:
+        Intake:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref AdminHttpApi
+            Path: /intake
+            Method: POST
+            Auth: { Authorizer: NONE }
+
+  # -------------------------------------------------------------------------
+  # Pipeline workers
+  # -------------------------------------------------------------------------
+  QueueConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-queue-consumer'
+      Description: Consumes submission messages and starts one workflow per applicant
+      CodeUri: backend/
+      Handler: src.handlers.workers.queue_consumer_handler
+      MemorySize: 512
+      Timeout: 60
+      ReservedConcurrentExecutions: 10
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref ProcessingStateMachine
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref ApplicantsTable }
+        - Statement:
+            - Effect: Allow
+              Action: [states:StartExecution]
+              Resource: !Ref ProcessingStateMachine
+      Events:
+        Consume:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ProcessingQueue.Arn
+            BatchSize: 5
+            MaximumBatchingWindowInSeconds: 5
+            MaximumConcurrency: 5
+
+  ExtractFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-extract'
+      Description: Extracts text from PDF, DOCX, DOC and image resumes
+      CodeUri: backend/
+      Handler: src.handlers.workers.extract_handler
+      MemorySize: 2048
+      Timeout: 300
+      EphemeralStorage: { Size: 1024 }
+      ReservedConcurrentExecutions: 10
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref ApplicantsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref AuditTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConfigTable }
+        - S3CrudPolicy: { BucketName: !Ref ResumeBucket }
+        - Statement:
+            - Effect: Allow
+              Action: [textract:DetectDocumentText, textract:AnalyzeDocument]
+              Resource: '*'
+
+  EvaluateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-evaluate'
+      Description: Calls the AI provider and validates evidence-backed fractions
+      CodeUri: backend/
+      Handler: src.handlers.workers.evaluate_handler
+      MemorySize: 1024
+      Timeout: 180
+      ReservedConcurrentExecutions: 8
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref ApplicantsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref AuditTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConfigTable }
+        - S3ReadPolicy: { BucketName: !Ref ResumeBucket }
+        - !Ref AppSecretsPolicy
+
+  ScoreFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-score'
+      Description: Deterministic Python scoring, eligibility and recommendations
+      CodeUri: backend/
+      Handler: src.handlers.workers.score_handler
+      MemorySize: 1024
+      Timeout: 60
+      ReservedConcurrentExecutions: 25
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref ApplicantsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref EvaluationsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref AuditTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConfigTable }
+
+  MarkFailedFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-mark-failed'
+      Description: Records failed workflow state for human review
+      CodeUri: backend/
+      Handler: src.handlers.workers.mark_failed_handler
+      MemorySize: 256
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref ApplicantsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref AuditTable }
+
+  ReportsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-reports'
+      Description: Generates Excel and PDF reports in the background
+      CodeUri: backend/
+      Handler: src.handlers.workers.reports_worker_handler
+      MemorySize: 2048
+      Timeout: 300
+      EphemeralStorage: { Size: 1024 }
+      ReservedConcurrentExecutions: 5
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref ReportsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ApplicantsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref EvaluationsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref AuditTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ConfigTable }
+        - S3ReadPolicy: { BucketName: !Ref ResumeBucket }
+        - S3CrudPolicy: { BucketName: !Ref ReportBucket }
+
+  ReconcileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-reconcile'
+      Description: Re-queues applications stuck in processing
+      CodeUri: backend/
+      Handler: src.handlers.workers.reprocess_handler
+      MemorySize: 512
+      Timeout: 120
+      Environment:
+        Variables:
+          PROCESSING_QUEUE_URL: !Ref ProcessingQueue
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref ApplicantsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref AuditTable }
+        - SQSSendMessagePolicy: { QueueName: !GetAtt ProcessingQueue.QueueName }
+      Events:
+        EveryThirtyMinutes:
+          Type: Schedule
+          Properties:
+            Schedule: rate(30 minutes)
+            Description: Requeue stalled applications
+
+  # -------------------------------------------------------------------------
+  # Log groups
+  # -------------------------------------------------------------------------
+  AdminApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-api', RetentionInDays: !Ref LogRetentionDays }
+  IntakeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-intake', RetentionInDays: !Ref LogRetentionDays }
+  QueueConsumerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-queue-consumer', RetentionInDays: !Ref LogRetentionDays }
+  ExtractLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-extract', RetentionInDays: !Ref LogRetentionDays }
+  EvaluateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-evaluate', RetentionInDays: !Ref LogRetentionDays }
+  ScoreLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-score', RetentionInDays: !Ref LogRetentionDays }
+  MarkFailedLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-mark-failed', RetentionInDays: !Ref LogRetentionDays }
+  ReportsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-reports', RetentionInDays: !Ref LogRetentionDays }
+  ReconcileLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-reconcile', RetentionInDays: !Ref LogRetentionDays }
+
+  # -------------------------------------------------------------------------
+  # Alarms
+  # -------------------------------------------------------------------------
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: SBG recruitment alarms
+      TopicName: !Sub '${AWS::StackName}-alerts'
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  ApiErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-api-errors'
+      AlarmDescription: Admin API is returning Lambda errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref AdminApiFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  IntakeErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-intake-errors'
+      AlarmDescription: Google Form intake submissions are failing
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref IntakeFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  WorkerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-worker-errors'
+      AlarmDescription: Processing worker failures
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref QueueConsumerFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  EvaluationErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-evaluation-errors'
+      AlarmDescription: AI evaluation errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref EvaluateFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  DeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-dead-letter-messages'
+      AlarmDescription: Messages have exhausted retries and landed in the DLQ
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt ProcessingDeadLetterQueue.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  QueueAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-queue-age'
+      AlarmDescription: Submission messages are waiting longer than 15 minutes
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions: [{ Name: QueueName, Value: !GetAtt ProcessingQueue.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 900
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  WorkflowFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-workflow-failures'
+      AlarmDescription: Step Functions executions failed
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions: [{ Name: StateMachineArn, Value: !Ref ProcessingStateMachine }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+Outputs:
+  ApiUrl:
+    Description: Admin API base URL
+    Value: !GetAtt AdminHttpApi.ApiEndpoint
+  UserPoolId:
+    Description: Cognito user pool ID (create users with the AWS CLI or console)
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Description: Cognito app client ID for the dashboard
+    Value: !Ref UserPoolClient
+  UserPoolDomain:
+    Description: Cognito hosted domain (not configured; use the API for password auth)
+    Value: !Sub 'cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+  ResumeBucket:
+    Value: !Ref ResumeBucket
+  ReportBucket:
+    Value: !Ref ReportBucket
+  ProcessingQueueUrl:
+    Value: !Ref ProcessingQueue
+  DeadLetterQueueUrl:
+    Value: !Ref ProcessingDeadLetterQueue
+  StateMachineArn:
+    Value: !Ref ProcessingStateMachine
+  AdminFunctionName:
+    Value: !Ref AdminApiFunction
+  ReportsFunctionName:
+    Value: !Ref ReportsFunction
+  AiSecretArn:
+    Description: Populate this secret with the DeepSeek API key if it was not supplied at deploy time
+    Value: !If [HasAiApiKey, !Ref AiSecret, 'not-created']
+  IntakeSecretArn:
+    Description: Shared intake key secret used by Apps Script
+    Value: !If [HasIntakeKey, !Ref IntakeSecret, 'not-created']
+  AlertTopicArn:
+    Value: !Ref AlertTopic

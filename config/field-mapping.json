@@ -1,0 +1,160 @@
+{
+  "version": "1.0.0",
+  "notes": "Edit form_question values to match your Google Form exactly. Aliases are normalised (lowercase, non-alphanumeric removed) and used as a fallback. Any unmatched question is preserved under responses.extra_fields.",
+  "fields": [
+    {
+      "canonical": "full_name",
+      "label": "Full name",
+      "form_question": "Full Name",
+      "aliases": ["name", "student name", "your name", "full name of applicant"],
+      "type": "string",
+      "required": true,
+      "pii": true
+    },
+    {
+      "canonical": "email",
+      "label": "Email",
+      "form_question": "Email Address",
+      "aliases": ["email", "college email", "email id", "e mail", "e mail address"],
+      "type": "email",
+      "required": true,
+      "pii": true
+    },
+    {
+      "canonical": "usn",
+      "label": "USN",
+      "form_question": "University Seat Number (USN)",
+      "aliases": ["usn", "seat number", "university seat number", "roll number", "usn number"],
+      "type": "string",
+      "required": true,
+      "pii": true
+    },
+    {
+      "canonical": "phone",
+      "label": "Phone",
+      "form_question": "Phone Number",
+      "aliases": ["phone", "mobile", "mobile number", "contact number", "phone number"],
+      "type": "phone",
+      "required": false,
+      "pii": true
+    },
+    {
+      "canonical": "department",
+      "label": "Department",
+      "form_question": "Department",
+      "aliases": ["branch", "department", "stream", "course"],
+      "type": "string",
+      "required": true,
+      "pii": false
+    },
+    {
+      "canonical": "year_of_study",
+      "label": "Year of study",
+      "form_question": "Year of Study",
+      "aliases": ["year", "current year", "year of study", "semester"],
+      "type": "string",
+      "required": true,
+      "pii": false
+    },
+    {
+      "canonical": "roles",
+      "label": "Preferred team(s)",
+      "form_question": "Which team(s) are you applying for?",
+      "aliases": ["preferred team", "preferred teams", "role", "roles", "preferred role", "team preference", "which team are you applying for"],
+      "type": "multi_select",
+      "required": true,
+      "pii": false
+    },
+    {
+      "canonical": "technical_skills",
+      "label": "Technical skills",
+      "form_question": "Technical Skills",
+      "aliases": ["skills", "technical skills", "technologies known", "tools and technologies"],
+      "type": "text",
+      "required": false,
+      "pii": false
+    },
+    {
+      "canonical": "experience",
+      "label": "Experience",
+      "form_question": "Experience (internships, freelance, clubs, competitions)",
+      "aliases": ["experience", "work experience", "internship experience", "relevant experience"],
+      "type": "text",
+      "required": false,
+      "pii": false
+    },
+    {
+      "canonical": "projects",
+      "label": "Projects",
+      "form_question": "Projects you have built",
+      "aliases": ["projects", "project details", "describe your projects", "project experience"],
+      "type": "text",
+      "required": false,
+      "pii": false
+    },
+    {
+      "canonical": "certifications",
+      "label": "Certifications",
+      "form_question": "Certifications",
+      "aliases": ["certifications", "certificates", "courses completed", "certification details"],
+      "type": "text",
+      "required": false,
+      "pii": false
+    },
+    {
+      "canonical": "leadership",
+      "label": "Leadership experience",
+      "form_question": "Leadership or team experience",
+      "aliases": ["leadership", "leadership experience", "team experience", "positions of responsibility"],
+      "type": "text",
+      "required": false,
+      "pii": false
+    },
+    {
+      "canonical": "motivation",
+      "label": "Motivation",
+      "form_question": "Why do you want to join the AWS Student Builder Group?",
+      "aliases": ["motivation", "why do you want to join", "statement of purpose", "why should we select you"],
+      "type": "text",
+      "required": false,
+      "pii": false
+    },
+    {
+      "canonical": "availability",
+      "label": "Availability",
+      "form_question": "Weekly availability and commitment",
+      "aliases": ["availability", "time commitment", "weekly availability", "how much time can you commit"],
+      "type": "string",
+      "required": true,
+      "pii": false
+    },
+    {
+      "canonical": "availability_hours",
+      "label": "Availability hours per week",
+      "form_question": "Hours available per week",
+      "aliases": ["hours per week", "weekly hours", "availability hours", "hours available"],
+      "type": "number",
+      "required": false,
+      "pii": false
+    },
+    {
+      "canonical": "resume",
+      "label": "Resume upload(s)",
+      "form_question": "Upload your resume",
+      "aliases": ["resume", "resume upload", "upload resume", "cv", "upload your resume", "portfolio"],
+      "type": "file",
+      "required": false,
+      "pii": true,
+      "multiple": true
+    },
+    {
+      "canonical": "consent",
+      "label": "Data processing consent",
+      "form_question": "I consent to my application being processed for recruitment",
+      "aliases": ["consent", "data consent", "i agree"],
+      "type": "boolean",
+      "required": false,
+      "pii": false
+    }
+  ]
+}

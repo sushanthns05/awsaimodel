@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 215 45% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 45% 12%;
+    --primary: 214 68% 14%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 214 30% 94%;
+    --secondary-foreground: 214 68% 14%;
+    --muted: 214 28% 95%;
+    --muted-foreground: 215 15% 42%;
+    --accent: 36 100% 50%;
+    --accent-foreground: 214 68% 12%;
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 24% 88%;
+    --input: 214 24% 86%;
+    --ring: 214 68% 24%;
+    --radius: 0.6rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    @apply bg-slate-50 text-foreground font-sans;
+  }
+
+  ::selection {
+    background: #ff990033;
+  }
+}
+
+@layer components {
+  .app-sidebar-link {
+    @apply flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-navy-100/80 transition-colors hover:bg-white/10 hover:text-white;
+  }
+  .app-sidebar-link-active {
+    @apply bg-white/10 text-white shadow-sm ring-1 ring-white/10;
+  }
+  .data-grid {
+    @apply w-full text-left text-sm;
+  }
+  .data-grid thead th {
+    @apply whitespace-nowrap border-b border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500;
+  }
+  .data-grid tbody td {
+    @apply border-b border-slate-100 px-4 py-3 align-middle;
+  }
+  .data-grid tbody tr {
+    @apply transition-colors hover:bg-slate-50/80;
+  }
+  .section-title {
+    @apply text-base font-semibold text-navy-900;
+  }
+  .field-label {
+    @apply text-xs font-semibold uppercase tracking-wide text-slate-500;
+  }
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

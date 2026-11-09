@@ -1,0 +1,191 @@
+{
+  "version": "1.0.0",
+  "default_role": "technical_team",
+  "roles": [
+    {
+      "id": "student_builder_group_leader",
+      "name": "Student Builder Group Leader",
+      "description": "Owns the group's direction, represents the community, plans the semester calendar and supports every team lead.",
+      "evaluation_focus": [
+        "Ownership of a community or team",
+        "Planning and prioritisation",
+        "Delegation and accountability",
+        "Communication with peers and faculty",
+        "Consistency of commitment across a semester"
+      ],
+      "interview_topics": ["Vision for the group", "Conflict resolution", "Planning a semester calendar"],
+      "weights": {
+        "relevant_skills": 15,
+        "projects_experience": 15,
+        "role_knowledge": 20,
+        "problem_solving": 15,
+        "communication": 15,
+        "commitment_availability": 10,
+        "leadership_collaboration": 10
+      }
+    },
+    {
+      "id": "technical_team",
+      "name": "Technical Team",
+      "description": "Builds workshops, demos and community projects; supports cloud, AI and web tracks.",
+      "evaluation_focus": [
+        "Programming and cloud fundamentals",
+        "Project depth and debugging",
+        "Ability to explain technical work",
+        "Workshop or peer teaching evidence"
+      ],
+      "interview_topics": ["Architecture trade-offs", "Debugging approach", "Explaining a project to a beginner"],
+      "weights": {
+        "relevant_skills": 25,
+        "projects_experience": 25,
+        "role_knowledge": 20,
+        "problem_solving": 15,
+        "communication": 5,
+        "commitment_availability": 5,
+        "leadership_collaboration": 5
+      }
+    },
+    {
+      "id": "social_media",
+      "name": "Social Media",
+      "description": "Runs the group's public presence, creates platform-native content and measures reach and engagement.",
+      "evaluation_focus": [
+        "Platform understanding",
+        "Content planning and copywriting",
+        "Evidence of published work",
+        "Measurement and iteration"
+      ],
+      "interview_topics": ["Content calendar for a workshop", "Handling a low-engagement post", "Platform-specific formats"],
+      "weights": {
+        "relevant_skills": 20,
+        "projects_experience": 20,
+        "role_knowledge": 20,
+        "problem_solving": 10,
+        "communication": 15,
+        "commitment_availability": 10,
+        "leadership_collaboration": 5
+      }
+    },
+    {
+      "id": "marketing_outreach",
+      "name": "Marketing & Outreach",
+      "description": "Drives participation, partnerships and sponsorship outreach across the campus and beyond.",
+      "evaluation_focus": [
+        "Audience understanding",
+        "Campaign or outreach evidence",
+        "Persuasive writing",
+        "Follow-through and tracking"
+      ],
+      "interview_topics": ["Campaign plan for a flagship event", "Sponsor outreach", "Measuring outreach success"],
+      "weights": {
+        "relevant_skills": 20,
+        "projects_experience": 20,
+        "role_knowledge": 15,
+        "problem_solving": 15,
+        "communication": 15,
+        "commitment_availability": 10,
+        "leadership_collaboration": 5
+      }
+    },
+    {
+      "id": "creative_design",
+      "name": "Creative & Design",
+      "description": "Designs posters, decks, event identities and digital assets for the group.",
+      "evaluation_focus": [
+        "Design craft evidence",
+        "Tool proficiency",
+        "Ability to work within a brief",
+        "Feedback and iteration"
+      ],
+      "interview_topics": ["Designing within a brand brief", "Critique of a public poster", "Turnaround under deadline"],
+      "weights": {
+        "relevant_skills": 25,
+        "projects_experience": 25,
+        "role_knowledge": 15,
+        "problem_solving": 10,
+        "communication": 10,
+        "commitment_availability": 10,
+        "leadership_collaboration": 5
+      }
+    },
+    {
+      "id": "operations_logistics",
+      "name": "Operations & Logistics",
+      "description": "Owns event operations, vendor coordination, budgets and on-ground execution.",
+      "evaluation_focus": [
+        "Planning and checklists",
+        "Vendor and budget coordination",
+        "Risk handling on event day",
+        "Reliability"
+      ],
+      "interview_topics": ["Run-of-show for an event", "Last-minute vendor cancellation", "Budget tracking"],
+      "weights": {
+        "relevant_skills": 15,
+        "projects_experience": 20,
+        "role_knowledge": 20,
+        "problem_solving": 20,
+        "communication": 10,
+        "commitment_availability": 10,
+        "leadership_collaboration": 5
+      }
+    },
+    {
+      "id": "event_management",
+      "name": "Event Management",
+      "description": "Plans and runs workshops, hackathons and community events end to end.",
+      "evaluation_focus": [
+        "Event ownership",
+        "Timeline and stakeholder management",
+        "Participant experience",
+        "Post-event follow-through"
+      ],
+      "interview_topics": ["Planning a 100-person workshop", "Handling no-shows", "Post-event feedback loop"],
+      "weights": {
+        "relevant_skills": 15,
+        "projects_experience": 20,
+        "role_knowledge": 20,
+        "problem_solving": 15,
+        "communication": 10,
+        "commitment_availability": 10,
+        "leadership_collaboration": 10
+      }
+    },
+    {
+      "id": "community_management",
+      "name": "Community Management",
+      "description": "Grows and supports the student community, moderates channels and runs engagement programmes.",
+      "evaluation_focus": [
+        "Community participation",
+        "Empathy and moderation judgement",
+        "Programme ideas",
+        "Consistency of engagement"
+      ],
+      "interview_topics": ["Welcoming new members", "Handling an inactive community", "Moderation scenario"],
+      "weights": {
+        "relevant_skills": 15,
+        "projects_experience": 15,
+        "role_knowledge": 20,
+        "problem_solving": 15,
+        "communication": 15,
+        "commitment_availability": 10,
+        "leadership_collaboration": 10
+      }
+    },
+    {
+      "id": "other",
+      "name": "Other",
+      "description": "Custom or emerging role defined by the recruitment administrators.",
+      "evaluation_focus": ["Relevant evidence described by the applicant"],
+      "interview_topics": ["Role expectations", "Relevant experience"],
+      "weights": {
+        "relevant_skills": 20,
+        "projects_experience": 20,
+        "role_knowledge": 15,
+        "problem_solving": 15,
+        "communication": 10,
+        "commitment_availability": 10,
+        "leadership_collaboration": 10
+      }
+    }
+  ]
+}

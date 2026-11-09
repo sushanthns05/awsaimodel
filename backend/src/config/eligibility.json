@@ -1,0 +1,97 @@
+{
+  "version": "1.0.0",
+  "description": "Configurable hard eligibility rules. A failed mandatory rule never auto-rejects: the applicant is flagged with the exact reason for human verification.",
+  "rules": [
+    {
+      "id": "full_name_present",
+      "label": "Full name provided",
+      "field": "full_name",
+      "type": "required",
+      "mandatory": true,
+      "message": "Full name is missing from the application."
+    },
+    {
+      "id": "email_present",
+      "label": "Email address provided",
+      "field": "email",
+      "type": "required",
+      "mandatory": true,
+      "message": "Email address is missing from the application."
+    },
+    {
+      "id": "email_valid",
+      "label": "Valid email address",
+      "field": "email",
+      "type": "pattern",
+      "pattern": "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$",
+      "mandatory": true,
+      "message": "Email address is not in a valid format."
+    },
+    {
+      "id": "usn_present",
+      "label": "University seat number (USN) provided",
+      "field": "usn",
+      "type": "required",
+      "mandatory": true,
+      "message": "USN is missing; identity cannot be verified."
+    },
+    {
+      "id": "usn_format",
+      "label": "USN format resembles an SJBIT seat number",
+      "field": "usn",
+      "type": "pattern",
+      "pattern": "^[1-9][A-Za-z]{2}[0-9]{2}[A-Za-z]{2,4}[0-9]{3}$",
+      "mandatory": false,
+      "message": "USN does not match the expected SJBIT format; verify manually."
+    },
+    {
+      "id": "department_present",
+      "label": "Department provided",
+      "field": "department",
+      "type": "required",
+      "mandatory": true,
+      "message": "Department is missing."
+    },
+    {
+      "id": "year_present",
+      "label": "Year of study provided",
+      "field": "year_of_study",
+      "type": "required",
+      "mandatory": true,
+      "message": "Year of study is missing."
+    },
+    {
+      "id": "role_selected",
+      "label": "At least one role preference selected",
+      "field": "roles",
+      "type": "required",
+      "mandatory": true,
+      "message": "No role preference was selected."
+    },
+    {
+      "id": "availability_present",
+      "label": "Availability stated",
+      "field": "responses.availability",
+      "type": "required",
+      "mandatory": true,
+      "message": "Availability / weekly time commitment is missing."
+    },
+    {
+      "id": "minimum_hours",
+      "label": "At least 4 hours per week available",
+      "field": "responses.availability_hours",
+      "type": "min_number",
+      "value": 4,
+      "mandatory": true,
+      "message": "Stated availability is below the minimum of 4 hours per week."
+    },
+    {
+      "id": "resume_present",
+      "label": "At least one resume document attached",
+      "field": "documents",
+      "type": "required",
+      "mandatory": false,
+      "message": "No resume document was attached; evaluation relies on application answers only."
+    }
+  ]
+}

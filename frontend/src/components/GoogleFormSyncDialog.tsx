@@ -7,11 +7,17 @@ import {
   FileSpreadsheet,
   Loader2,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   Upload,
 } from 'lucide-react'
 import { api } from '../lib/api'
-import { importGoogleFormResponses, parseCSV } from '../lib/googleSync'
+import {
+  clearStoredLiveApplicants,
+  getStoredLiveApplicants,
+  importGoogleFormResponses,
+  parseCSV,
+} from '../lib/googleSync'
 import { Button } from './ui/button'
 import { Dialog } from './ui/dialog'
 import { Input } from './ui/input'
@@ -30,42 +36,103 @@ interface Props {
 export function GoogleFormSyncDialog({ open, onOpenChange }: Props) {
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<'sheet' | 'csv' | 'webhook'>('sheet')
-  const [sheetUrl, setSheetUrl] = useState('')
+  const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem('sbg_last_sheet_url') || '')
   const [csvText, setCsvText] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
 
-  async function handleSheetSync() {
+  const currentApplicants = getStoredLiveApplicants()
+
+  async function handleSheetSync(forceFresh = false) {
     setError('')
     setMessage('')
-    if (!sheetUrl.trim()) {
+    const trimmed = sheetUrl.trim()
+    if (!trimmed) {
       setError('Please paste your Google Sheet link or spreadsheet ID.')
       return
     }
+    localStorage.setItem('sbg_last_sheet_url', trimmed)
     setLoading(true)
+
     try {
-      try {
-        const res = await api.syncGoogleSheet(sheetUrl.trim())
-        setMessage(`Successfully imported and evaluated ${res.imported} applicants from Google Sheet!`)
-      } catch {
-        let csvData = ''
-        const match = sheetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/)
-        if (match) {
-          const sheetId = match[1]
-          const exportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`
-          const resp = await fetch(exportUrl)
-          if (!resp.ok) throw new Error('Sheet is private. Set sharing to "Anyone with the link can view", or export as CSV.')
-          csvData = await resp.text()
-        }
-        if (csvData) {
-          const records = parseCSV(csvData)
-          const result = importGoogleFormResponses(records)
-          setMessage(`Successfully synced ${result.imported} candidate responses from Google Sheet!`)
-        } else {
-          throw new Error('Please ensure Google Sheet sharing is set to "Anyone with the link can view", or use CSV upload.')
+      // 1. Extract spreadsheet ID and optional sheet gid
+      const match = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/)
+      const sheetId = match ? match[1] : (trimmed.length > 20 && !trimmed.includes('/') ? trimmed : null)
+
+      if (!sheetId) {
+        throw new Error('Could not identify a valid Google Spreadsheet ID in the link. Please check the URL.')
+      }
+
+      const gidMatch = trimmed.match(/[#?&]gid=([0-9]+)/)
+      const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : ''
+
+      // 2. Fetch CSV directly from Google Sheets using multiple endpoints
+      let csvData = ''
+      const candidates = [
+        `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv${gidParam}`,
+        `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gidParam ? `&gid=${gidMatch![1]}` : ''}`,
+        `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`,
+        `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`,
+      ]
+
+      let isRestricted = false
+      for (const endpoint of candidates) {
+        try {
+          const resp = await fetch(endpoint)
+          if (resp.ok) {
+            const text = await resp.text()
+            if (text.includes('<!DOCTYPE') || text.includes('<html') || text.includes('accounts.google.com')) {
+              isRestricted = true
+              continue
+            }
+            if (text.trim().length > 0) {
+              csvData = text
+              break
+            }
+          }
+        } catch {
+          // Continue to next endpoint
         }
       }
+
+      // If direct browser fetch failed, try backend sync endpoint as fallback
+      if (!csvData) {
+        try {
+          const res = await api.syncGoogleSheet(trimmed)
+          if (res && res.imported > 0) {
+            setMessage(`Successfully imported and evaluated ${res.imported} applicants from Google Sheet!`)
+            await queryClient.invalidateQueries()
+            return
+          }
+        } catch {
+          // Backend offline or failed
+        }
+
+        if (isRestricted) {
+          throw new Error(
+            'The Google Sheet is currently restricted. In your Google Sheet, click "Share" (top-right) → under General Access change "Restricted" to "Anyone with the link can view" → then click Sync Real Responses Now again. Or export the Sheet as CSV and upload it in the "Upload CSV" tab.',
+          )
+        }
+
+        throw new Error(
+          'Could not reach the Google Sheet. Please ensure General Access is set to "Anyone with the link can view". Alternatively, open the sheet, click File → Download → Comma Separated Values (.csv), and upload it via the "Upload CSV" tab.',
+        )
+      }
+
+      // 3. Parse CSV rows
+      const records = parseCSV(csvData)
+      if (records.length === 0) {
+        throw new Error(
+          'Connected to Google Sheet, but found 0 response rows. Ensure the sheet has received responses.',
+        )
+      }
+
+      // 4. Ingest and score applicants
+      const result = importGoogleFormResponses(records, forceFresh)
+      setMessage(
+        `Successfully loaded ${result.totalRows} responses from Google Sheet! All ${result.totalRows} applicants are evaluated and live in your dashboard.`,
+      )
       await queryClient.invalidateQueries()
     } catch (err) {
       setError((err as Error).message)
@@ -74,7 +141,7 @@ export function GoogleFormSyncDialog({ open, onOpenChange }: Props) {
     }
   }
 
-  async function handleCsvImport() {
+  async function handleCsvImport(forceFresh = false) {
     setError('')
     setMessage('')
     if (!csvText.trim()) {
@@ -87,9 +154,9 @@ export function GoogleFormSyncDialog({ open, onOpenChange }: Props) {
       if (records.length === 0) {
         throw new Error('No valid response rows found in the CSV.')
       }
-      const result = importGoogleFormResponses(records)
+      const result = importGoogleFormResponses(records, forceFresh)
       setMessage(
-        `Successfully imported ${result.imported} real responses from Google Form (${result.totalRows} total rows processed).`,
+        `Successfully imported and evaluated all ${result.totalRows} real responses from Google Form!`,
       )
       await queryClient.invalidateQueries()
     } catch (err) {
@@ -106,11 +173,20 @@ export function GoogleFormSyncDialog({ open, onOpenChange }: Props) {
     reader.onload = (evt) => {
       const content = String(evt.target?.result || '')
       setCsvText(content)
-      setMessage(`Loaded "${file.name}" (${content.split('\n').length - 1} response rows). Click "Import & Evaluate" below.`)
+      const rowCount = Math.max(0, content.split('\n').filter((l) => l.trim()).length - 1)
+      setMessage(`Loaded "${file.name}" (${rowCount} response rows). Click "Import & Evaluate" below.`)
       setError('')
     }
     reader.onerror = () => setError('Failed to read file.')
     reader.readAsText(file)
+  }
+
+  async function handleResetData() {
+    if (window.confirm('Clear all imported candidate responses from local storage and start fresh?')) {
+      clearStoredLiveApplicants()
+      setMessage('Cleared stored candidates. Paste your Google Sheet URL to sync fresh.')
+      await queryClient.invalidateQueries()
+    }
   }
 
   return (
@@ -132,6 +208,24 @@ export function GoogleFormSyncDialog({ open, onOpenChange }: Props) {
             Open Live Form <ExternalLink className="h-3 w-3" />
           </a>
         </div>
+
+        {currentApplicants.length > 0 ? (
+          <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+            <span className="text-slate-600">
+              Currently linked:{' '}
+              <strong className="text-navy-950 font-semibold">{currentApplicants.length} applicants</strong> loaded in
+              dashboard
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 text-[11px] text-slate-500 hover:text-red-600"
+              onClick={handleResetData}
+            >
+              <RotateCcw className="h-3 w-3 mr-1" /> Reset
+            </Button>
+          </div>
+        ) : null}
 
         {message ? (
           <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
@@ -178,10 +272,18 @@ export function GoogleFormSyncDialog({ open, onOpenChange }: Props) {
               💡 Ensure the Google Sheet sharing setting is set to{' '}
               <strong>"Anyone with the link can view"</strong> so the recruitment system can pull submissions.
             </div>
-            <Button variant="accent" size="sm" className="w-full" onClick={handleSheetSync} disabled={loading}>
-              {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <RefreshCw className="h-4 w-4 mr-1.5" />}
-              {loading ? 'Syncing & Evaluating candidates…' : 'Sync Real Responses Now'}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="accent"
+                size="sm"
+                className="w-full"
+                onClick={() => handleSheetSync(false)}
+                disabled={loading}
+              >
+                {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <RefreshCw className="h-4 w-4 mr-1.5" />}
+                {loading ? 'Syncing & Evaluating candidates…' : 'Sync Real Responses Now'}
+              </Button>
+            </div>
           </TabsContent>
 
           <TabsContent value="csv" className="space-y-3 pt-2">
@@ -226,7 +328,13 @@ export function GoogleFormSyncDialog({ open, onOpenChange }: Props) {
               </div>
             ) : null}
 
-            <Button variant="accent" size="sm" className="w-full" onClick={handleCsvImport} disabled={loading || !csvText.trim()}>
+            <Button
+              variant="accent"
+              size="sm"
+              className="w-full"
+              onClick={() => handleCsvImport(false)}
+              disabled={loading || !csvText.trim()}
+            >
               {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Sparkles className="h-4 w-4 mr-1.5" />}
               {loading ? 'Processing & Scoring with Gemini…' : 'Import & Evaluate Candidates'}
             </Button>
@@ -255,4 +363,5 @@ export function GoogleFormSyncDialog({ open, onOpenChange }: Props) {
     </Dialog>
   )
 }
+
 

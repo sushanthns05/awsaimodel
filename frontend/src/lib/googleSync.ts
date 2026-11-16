@@ -38,45 +38,109 @@ export function saveStoredLiveDetail(detail: ApplicantDetail): void {
   localStorage.setItem(`${DETAILS_KEY}_${detail.applicantId}`, JSON.stringify(detail))
 }
 
-/** Parses CSV text into array of object records */
-export function parseCSV(text: string): Record<string, string>[] {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0)
-  if (lines.length < 2) return []
-
-  // Parse header
-  const headers = splitCsvLine(lines[0])
-  const records: Record<string, string>[] = []
-
-  for (let i = 1; i < lines.length; i++) {
-    const values = splitCsvLine(lines[i])
-    if (values.length === 0 || values.every((v) => !v.trim())) continue
-    const row: Record<string, string> = {}
-    headers.forEach((h, idx) => {
-      row[h.trim()] = (values[idx] || '').trim()
-    })
-    records.push(row)
+export function clearStoredLiveApplicants(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+    const toRemove: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && k.startsWith(DETAILS_KEY)) {
+        toRemove.push(k)
+      }
+    }
+    toRemove.forEach((k) => localStorage.removeItem(k))
+  } catch {
+    // Ignore storage clear errors
   }
-  return records
 }
 
-function splitCsvLine(line: string): string[] {
-  const result: string[] = []
-  let current = ''
+/** Parses CSV text into array of object records following RFC 4180 (handles multiline cells, quotes, commas) */
+export function parseCSV(text: string): Record<string, string>[] {
+  if (!text || !text.trim()) return []
+
+  const rows: string[][] = []
+  let currentRow: string[] = []
+  let currentField = ''
   let inQuotes = false
 
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i]
-    if (char === '"' || char === "'") {
-      inQuotes = !inQuotes
-    } else if (char === ',' && !inQuotes) {
-      result.push(current.replace(/^["']|["']$/g, '').trim())
-      current = ''
+  let i = 0
+  while (i < text.length) {
+    const char = text[i]
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (i + 1 < text.length && text[i + 1] === '"') {
+          currentField += '"'
+          i += 2
+          continue
+        } else {
+          inQuotes = false
+          i++
+          continue
+        }
+      } else {
+        currentField += char
+        i++
+        continue
+      }
+    }
+
+    if (char === '"') {
+      inQuotes = true
+      i++
+    } else if (char === ',') {
+      currentRow.push(currentField.trim())
+      currentField = ''
+      i++
+    } else if (char === '\r') {
+      if (i + 1 < text.length && text[i + 1] === '\n') {
+        i++
+      }
+      currentRow.push(currentField.trim())
+      currentField = ''
+      if (currentRow.some((f) => f.length > 0)) {
+        rows.push(currentRow)
+      }
+      currentRow = []
+      i++
+    } else if (char === '\n') {
+      currentRow.push(currentField.trim())
+      currentField = ''
+      if (currentRow.some((f) => f.length > 0)) {
+        rows.push(currentRow)
+      }
+      currentRow = []
+      i++
     } else {
-      current += char
+      currentField += char
+      i++
     }
   }
-  result.push(current.replace(/^["']|["']$/g, '').trim())
-  return result
+
+  if (currentField.length > 0 || currentRow.length > 0) {
+    currentRow.push(currentField.trim())
+    if (currentRow.some((f) => f.length > 0)) {
+      rows.push(currentRow)
+    }
+  }
+
+  if (rows.length < 2) return []
+
+  // Clean headers
+  const headers = rows[0].map((h) => h.replace(/^["']|["']$/g, '').trim())
+  const records: Record<string, string>[] = []
+
+  for (let r = 1; r < rows.length; r++) {
+    const rowValues = rows[r]
+    if (rowValues.length === 0 || rowValues.every((v) => !v || !v.trim())) continue
+    const record: Record<string, string> = {}
+    headers.forEach((h, idx) => {
+      if (h) record[h] = (rowValues[idx] || '').trim()
+    })
+    records.push(record)
+  }
+
+  return records
 }
 
 function normaliseText(str: string): string {
@@ -195,41 +259,78 @@ export function computeLiveOverview(applicants: ApplicantBrief[]): Overview {
 }
 
 /** Ingests real responses from Google Form CSV */
-export function importGoogleFormResponses(records: Record<string, string>[]): SyncResult {
-  const existing = getStoredLiveApplicants()
-  const existingEmails = new Set(existing.map((a) => a.email.toLowerCase()))
+export function importGoogleFormResponses(records: Record<string, string>[], reset = false): SyncResult {
+  if (reset) {
+    clearStoredLiveApplicants()
+  }
+  const existing = reset ? [] : getStoredLiveApplicants()
+  const existingByEmail = new Map<string, ApplicantBrief>()
+  const existingByUsn = new Map<string, ApplicantBrief>()
+
+  existing.forEach((a) => {
+    if (a.email) existingByEmail.set(a.email.toLowerCase(), a)
+    if (a.usn) existingByUsn.set(a.usn.toLowerCase(), a)
+  })
+
+  const updatedApplicants: ApplicantBrief[] = []
   const newApplicants: ApplicantBrief[] = []
   const errors: string[] = []
 
   records.forEach((row, idx) => {
     try {
-      const email = findValue(row, ['email', 'mail', 'id']) || `student${idx + 1}@sjbit.edu.in`
-      if (existingEmails.has(email.toLowerCase())) return
+      const email =
+        findValue(row, ['email', 'e-mail', 'mail address', 'mail id', 'email address']) ||
+        findValue(row, ['username', 'account']) ||
+        `student${idx + 1}@sjbit.edu.in`
 
-      const fullName = findValue(row, ['name', 'full name', 'student name']) || `Applicant ${existing.length + newApplicants.length + 1}`
-      const usn = (findValue(row, ['usn', 'seat', 'university seat']) || `1JS23CS${100 + idx}`).toUpperCase()
-      const department = findValue(row, ['department', 'branch', 'dept']) || 'Computer Science and Engineering'
-      const yearOfStudy = findValue(row, ['year of study', 'year']) || '3rd Year'
-      const roleStr = findValue(row, ['role', 'team', 'applying for', 'preferred']) || 'Cloud Architecture & AWS Services'
-      const submittedAt = findValue(row, ['timestamp']) || new Date().toISOString()
-      const resumeLink = findValue(row, ['resume', 'cv', 'upload', 'drive', 'portfolio'])
+      const fullName =
+        findValue(row, ['full name', 'student name', 'candidate name', 'your name', 'applicant name', 'name']) ||
+        `Applicant ${idx + 1}`
+
+      const rawUsn =
+        findValue(row, ['usn', 'university seat', 'roll number', 'roll no', 'reg no', 'registration', 'student id']) ||
+        `1JS23CS${String(idx + 1).padStart(3, '0')}`
+      const usn = rawUsn.toUpperCase().trim()
+
+      const department =
+        findValue(row, ['department', 'branch', 'stream', 'course', 'discipline', 'dept']) ||
+        'Computer Science and Engineering'
+
+      const yearOfStudy =
+        findValue(row, ['year of study', 'current year', 'year', 'semester', 'sem']) ||
+        '3rd Year'
+
+      const roleStr =
+        findValue(row, ['role', 'domain', 'team', 'position', 'applying for', 'preferred role', 'preference']) ||
+        'Cloud Architecture & AWS Services'
+
+      const submittedAt = findValue(row, ['timestamp', 'date', 'time']) || new Date().toISOString()
+      const resumeLink = findValue(row, ['resume', 'cv', 'curriculum vitae', 'drive', 'portfolio', 'upload', 'link'])
 
       const roles = roleStr.split(/[,;|\n]+/).map((r) => r.trim()).filter(Boolean)
       if (roles.length === 0) roles.push('Cloud Architecture & AWS Services')
 
-      // Deterministic scoring calculation
-      let score = 70
+      // Deterministic and keyword-weighted scoring calculation
+      let score = 66
       const detailStr = JSON.stringify(row).toLowerCase()
-      if (detailStr.includes('aws') || detailStr.includes('cloud')) score += 8
-      if (detailStr.includes('project') || detailStr.includes('github')) score += 8
-      if (detailStr.includes('lead') || detailStr.includes('organ')) score += 6
-      if (resumeLink) score += 4
-      score = Math.min(96, Math.max(52, score))
+
+      if (detailStr.includes('aws') || detailStr.includes('cloud') || detailStr.includes('ec2') || detailStr.includes('s3')) score += 8
+      if (detailStr.includes('lambda') || detailStr.includes('dynamodb') || detailStr.includes('devops') || detailStr.includes('docker')) score += 5
+      if (detailStr.includes('react') || detailStr.includes('node') || detailStr.includes('typescript') || detailStr.includes('python')) score += 6
+      if (detailStr.includes('ai') || detailStr.includes('machine learning') || detailStr.includes('llm') || detailStr.includes('model')) score += 6
+      if (detailStr.includes('github.com') || detailStr.includes('gitlab.com') || detailStr.includes('project') || detailStr.includes('portfolio')) score += 8
+      if (detailStr.includes('hackathon') || detailStr.includes('competition') || detailStr.includes('build')) score += 5
+      if (detailStr.includes('lead') || detailStr.includes('organ') || detailStr.includes('head') || detailStr.includes('volunteer')) score += 4
+      if (resumeLink && (resumeLink.includes('drive.google.com') || resumeLink.includes('http'))) score += 5
+
+      score = Math.min(96, Math.max(56, score))
 
       const recommendation =
-        score >= 80 ? 'STRONG_INTERVIEW' : score >= 65 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
+        score >= 82 ? 'STRONG_INTERVIEW' : score >= 68 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
 
-      const applicantId = `AWS-2026-${String(existing.length + newApplicants.length + 1).padStart(3, '0')}`
+      // Check if candidate already exists
+      const existingMatch = existingByEmail.get(email.toLowerCase()) || existingByUsn.get(usn.toLowerCase())
+      const applicantId = existingMatch ? existingMatch.applicantId : `AWS-2026-${String(existing.length + newApplicants.length + 1).padStart(3, '0')}`
 
       const brief: ApplicantBrief = {
         applicantId,
@@ -244,7 +345,7 @@ export function importGoogleFormResponses(records: Record<string, string>[]): Sy
         totalScore: score,
         recommendation,
         eligibilityStatus: 'PASS',
-        reviewStatus: 'PENDING',
+        reviewStatus: existingMatch ? existingMatch.reviewStatus : 'PENDING',
         urgentReview: false,
         documents: resumeLink ? 1 : 0,
         rubricVersion: '2026.1',
@@ -261,7 +362,7 @@ export function importGoogleFormResponses(records: Record<string, string>[]): Sy
           full_name: fullName,
           email,
           usn,
-          phone: findValue(row, ['phone', 'mobile', 'contact']) || '',
+          phone: findValue(row, ['phone', 'mobile', 'whatsapp', 'contact']) || '',
           department,
           year_of_study: yearOfStudy,
           roles,
@@ -269,11 +370,11 @@ export function importGoogleFormResponses(records: Record<string, string>[]): Sy
           processing_status: 'COMPLETED',
           processing_error: '',
           extracted_text_chars: 3500,
-          extraction_summary: { source: 'Google Form' },
+          extraction_summary: { source: 'Google Form Live Submission' },
           application_complete: true,
           missing_required_fields: [],
           urgent_review: false,
-          review_status: 'PENDING',
+          review_status: existingMatch ? existingMatch.reviewStatus : 'PENDING',
           review_decision: '',
           review_notes: '',
           reviewed_by: '',
@@ -427,7 +528,7 @@ export function importGoogleFormResponses(records: Record<string, string>[]): Sy
           model_metadata: { provider: 'gemini', model: 'gemini-1.5-flash', structured_output: true },
           validation_errors: [],
           document_coverage: {},
-          review_status: 'PENDING',
+          review_status: existingMatch ? existingMatch.reviewStatus : 'PENDING',
           human_notes: '',
           human_override: {},
           version: 1,
@@ -437,19 +538,31 @@ export function importGoogleFormResponses(records: Record<string, string>[]): Sy
       }
 
       saveStoredLiveDetail(detail)
-      newApplicants.push(brief)
-      existingEmails.add(email.toLowerCase())
+
+      if (existingMatch) {
+        updatedApplicants.push(brief)
+      } else {
+        newApplicants.push(brief)
+        existingByEmail.set(email.toLowerCase(), brief)
+        existingByUsn.set(usn.toLowerCase(), brief)
+      }
     } catch (rowErr) {
       errors.push(`Row ${idx + 1}: ${(rowErr as Error).message}`)
     }
   })
 
-  const combined = [...existing, ...newApplicants]
+  // Build final combined list: update existing entries and append new ones
+  const finalMap = new Map<string, ApplicantBrief>()
+  existing.forEach((a) => finalMap.set(a.applicantId, a))
+  updatedApplicants.forEach((a) => finalMap.set(a.applicantId, a))
+  newApplicants.forEach((a) => finalMap.set(a.applicantId, a))
+
+  const combined = Array.from(finalMap.values())
   saveStoredLiveApplicants(combined)
 
   return {
     totalRows: records.length,
-    imported: newApplicants.length,
+    imported: newApplicants.length + updatedApplicants.length,
     applicants: combined,
     errors,
   }

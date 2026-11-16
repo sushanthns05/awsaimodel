@@ -70,9 +70,6 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
     const result = importGoogleFormResponses(records)
     return { total_rows: result.totalRows, imported: result.imported, skipped_duplicates: 0 } as unknown as T
   }
-  if (path.startsWith('/intake/sync-sheet')) {
-    return { total_rows: 0, imported: 0, skipped_duplicates: 0, message: 'Synced' } as unknown as T
-  }
   if (path.startsWith('/applicants/') && path.includes('/review')) {
     const b = (body as Record<string, string>) || {}
     return { applicantId: 'AWS-2026-001', reviewStatus: b.decision || 'APPROVED', decision: b.decision || 'APPROVED' } as unknown as T

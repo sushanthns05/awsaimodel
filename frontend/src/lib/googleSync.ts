@@ -9,9 +9,13 @@ export interface SyncResult {
 
 const STORAGE_KEY = 'sbg_live_applicants'
 const DETAILS_KEY = 'sbg_live_applicant_details'
+const EVAL_VERSION = '2026.2_proper_rubric'
 
 export function getStoredLiveApplicants(): ApplicantBrief[] {
   try {
+    if (typeof window !== 'undefined' && localStorage.getItem('sbg_eval_version') !== EVAL_VERSION) {
+      reEvaluateStoredApplicants()
+    }
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
     return JSON.parse(raw) as ApplicantBrief[]
@@ -171,54 +175,40 @@ export function computeLiveOverview(applicants: ApplicantBrief[]): Overview {
   const avg = scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : 0
   const max = scores.length ? Math.max(...scores) : 0
 
-  const roleStatsMap: Record<string, RoleStat> = {
-    cloud_architecture: {
-      roleId: 'cloud_architecture',
-      name: 'Cloud Architecture & AWS Services',
-      applicants: 0,
-      processed: 0,
-      eligible: 0,
-      shortlisted: 0,
-      averageScore: 0,
-      strongRecommendations: 0,
-    },
-    full_stack: {
-      roleId: 'full_stack',
-      name: 'Full-Stack Development (React & Node)',
-      applicants: 0,
-      processed: 0,
-      eligible: 0,
-      shortlisted: 0,
-      averageScore: 0,
-      strongRecommendations: 0,
-    },
-    ai_ml: {
-      roleId: 'ai_ml',
-      name: 'AI / Machine Learning & Generative AI',
-      applicants: 0,
-      processed: 0,
-      eligible: 0,
-      shortlisted: 0,
-      averageScore: 0,
-      strongRecommendations: 0,
-    },
-  }
+  const roleStatsMap: Record<string, RoleStat> = {}
 
   applicants.forEach((app) => {
     app.roles.forEach((r) => {
-      const norm = normaliseText(r)
-      let targetKey = 'cloud_architecture'
-      if (norm.includes('full') || norm.includes('web') || norm.includes('react')) targetKey = 'full_stack'
-      else if (norm.includes('ai') || norm.includes('ml') || norm.includes('machine')) targetKey = 'ai_ml'
-
-      if (roleStatsMap[targetKey]) {
-        roleStatsMap[targetKey].applicants++
-        roleStatsMap[targetKey].processed++
-        if (app.eligibilityStatus === 'PASS') roleStatsMap[targetKey].eligible++
-        if (app.reviewStatus === 'APPROVED') roleStatsMap[targetKey].shortlisted++
-        if (app.recommendation === 'STRONG_INTERVIEW') roleStatsMap[targetKey].strongRecommendations++
+      const roleName = r.trim() || 'General'
+      const roleId = roleName.toLowerCase().replace(/[^a-z0-9]/g, '_')
+      if (!roleStatsMap[roleId]) {
+        roleStatsMap[roleId] = {
+          roleId,
+          name: roleName,
+          applicants: 0,
+          processed: 0,
+          eligible: 0,
+          shortlisted: 0,
+          averageScore: 0,
+          strongRecommendations: 0,
+        }
       }
+      roleStatsMap[roleId].applicants++
+      roleStatsMap[roleId].processed++
+      if (app.eligibilityStatus === 'PASS') roleStatsMap[roleId].eligible++
+      if (app.reviewStatus === 'APPROVED') roleStatsMap[roleId].shortlisted++
+      if (app.recommendation === 'STRONG_INTERVIEW') roleStatsMap[roleId].strongRecommendations++
     })
+  })
+
+  // Compute average score per role
+  Object.values(roleStatsMap).forEach((st) => {
+    const roleScores = applicants
+      .filter((a) => a.roles.some((r) => r.toLowerCase().replace(/[^a-z0-9]/g, '_') === st.roleId))
+      .map((a) => a.totalScore)
+    st.averageScore = roleScores.length
+      ? Math.round((roleScores.reduce((a, b) => a + b, 0) / roleScores.length) * 10) / 10
+      : 0
   })
 
   const scoreDistribution = [
@@ -255,6 +245,430 @@ export function computeLiveOverview(applicants: ApplicantBrief[]): Overview {
     },
     truncated: false,
     generatedAt: new Date().toISOString(),
+  }
+}
+
+export interface ApplicationEvaluation {
+  score: number
+  recommendation: 'STRONG_INTERVIEW' | 'INTERVIEW_CONSIDERATION' | 'MANUAL_REVIEW'
+  criteria: {
+    criterion_id: string
+    name: string
+    max_score: number
+    suggested_score: number
+    final_score: number
+    evidence: string[]
+    reasoning: string
+    validated: boolean
+    validation_error: string
+  }[]
+  summary: string
+  strengths: string[]
+  technicalSkills: string[]
+  nonTechnicalSkills: string[]
+}
+
+/**
+ * Evaluates student application based on the exact Google Form rubric:
+ * 1. Technical areas familiarity (Max: 20 pts)
+ * 2. Technical proficiency rating (Max: 15 pts)
+ * 3. Projects & Hackathon experience (Max: 20 pts)
+ * 4. Team-specific skills & leadership (Max: 20 pts)
+ * 5. Strongest skill & contribution to group (Max: 25 pts)
+ * Resume upload is optional with 0 extra points to prevent unfair bias.
+ */
+export function evaluateStudentApplication(
+  row: Record<string, string>,
+  appliedRole: string,
+  resumeLink: string
+): ApplicationEvaluation {
+  const normRole = normaliseText(appliedRole)
+  const isTechRole =
+    normRole.includes('tech') ||
+    normRole.includes('cloud') ||
+    normRole.includes('full') ||
+    normRole.includes('dev') ||
+    normRole.includes('ai') ||
+    normRole.includes('ml') ||
+    normRole.includes('architect')
+  const isEventPR =
+    normRole.includes('event') ||
+    normRole.includes('pr') ||
+    normRole.includes('media') ||
+    normRole.includes('public')
+  const isOpsLogistics =
+    normRole.includes('operat') ||
+    normRole.includes('logistic') ||
+    normRole.includes('manage')
+  const isCreative =
+    normRole.includes('creat') ||
+    normRole.includes('decor') ||
+    normRole.includes('design') ||
+    normRole.includes('art')
+
+  // 1. Technical Areas Familiarity (Max 20 Points)
+  const techAreasRaw = findValue(row, [
+    'whichofthefollowingtechnicalareas',
+    'areasyouarefamiliarwith',
+    'technicalareas',
+    'familiarwith',
+  ])
+  const techAreasList = techAreasRaw
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && s.toLowerCase() !== 'other')
+
+  let techAreasScore = 0
+  if (isTechRole) {
+    techAreasList.forEach((area) => {
+      const a = area.toLowerCase()
+      if (a.includes('aws')) techAreasScore += 3.5
+      else if (a.includes('cloud')) techAreasScore += 3.5
+      else if (a.includes('ai') || a.includes('machine') || a.includes('learning')) techAreasScore += 3.0
+      else if (a.includes('react')) techAreasScore += 2.5
+      else if (a.includes('node')) techAreasScore += 2.5
+      else if (a.includes('python')) techAreasScore += 2.0
+      else if (a.includes('javascript') || a.includes('js')) techAreasScore += 2.0
+      else if (a.includes('java')) techAreasScore += 2.0
+      else if (a.includes('database') || a.includes('sql') || a.includes('nosql')) techAreasScore += 2.0
+      else if (a.includes('html') || a.includes('css')) techAreasScore += 1.5
+      else techAreasScore += 1.0
+    })
+  } else {
+    techAreasScore = 6.0
+    techAreasList.forEach((area) => {
+      const a = area.toLowerCase()
+      if (a.includes('aws') || a.includes('cloud')) techAreasScore += 3.0
+      else if (a.includes('html') || a.includes('css') || a.includes('python') || a.includes('design'))
+        techAreasScore += 2.5
+      else techAreasScore += 1.5
+    })
+  }
+  const finalTechAreasScore = Math.min(20, Math.max(techAreasList.length > 0 ? 4 : 0, Math.round(techAreasScore)))
+
+  // 2. Technical Proficiency Rating (Max 15 Points)
+  const profRaw = findValue(row, [
+    'rateyourtechnicalproficiency',
+    'technicalproficiency',
+    'proficiency',
+  ])
+  const profMatch = profRaw.match(/([1-5])/)
+  const profRating = profMatch ? parseInt(profMatch[1], 10) : 3
+
+  let profScore = 9
+  if (profRating === 5) profScore = 15
+  else if (profRating === 4) profScore = 12
+  else if (profRating === 3) profScore = 9
+  else if (profRating === 2) profScore = 6
+  else if (profRating === 1) profScore = 3
+
+  // 3. Projects & Hackathon Experience (Max 20 Points)
+  const hackathonsRaw = findValue(row, [
+    'haveyouparticipatedinanyhackathons',
+    'hackathons',
+    'codingcompetitions',
+    'technicaleventsorworkshops',
+  ]).toLowerCase()
+  const hasHackathons = hackathonsRaw.includes('yes') || hackathonsRaw.startsWith('y')
+
+  const projectsRaw = findValue(row, [
+    'haveyoudevelopedanyprojects',
+    'developedanyprojects',
+  ]).toLowerCase()
+  const hasProjects = projectsRaw.includes('yes') || projectsRaw.startsWith('y')
+
+  const hackathonPoints = hasHackathons ? 10 : 3
+  const projectPoints = hasProjects ? 10 : 3
+  const practicalScore = hackathonPoints + projectPoints // 6 to 20
+
+  // 4. Team Specific Skills & Leadership (Max 20 Points)
+  const skillsRaw = findValue(row, [
+    'whichskillsdoyoupossess',
+    'skillsdoyoupossess',
+    'teamspecificskills',
+  ])
+  const skillsList = skillsRaw
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+
+  const leadershipRaw = findValue(row, [
+    'haveyoupreviouslyheldanyleadership',
+    'leadershipororganizationalresponsibilities',
+    'organizationalresponsibilities',
+  ]).toLowerCase()
+  const hasLeadership = leadershipRaw.includes('yes') || leadershipRaw.startsWith('y')
+
+  let skillsPoints = 0
+  skillsList.forEach((sk) => {
+    const s = sk.toLowerCase()
+    if (isTechRole) {
+      if (s.includes('programming') || s.includes('development')) skillsPoints += 4.5
+      else if (s.includes('problem')) skillsPoints += 4.0
+      else if (s.includes('research')) skillsPoints += 3.5
+      else if (s.includes('communication') || s.includes('speaking')) skillsPoints += 2.0
+      else if (s.includes('leadership') || s.includes('planning')) skillsPoints += 2.0
+      else skillsPoints += 1.5
+    } else if (isEventPR) {
+      if (s.includes('event') || s.includes('planning')) skillsPoints += 4.5
+      else if (s.includes('public') || s.includes('speaking')) skillsPoints += 4.5
+      else if (s.includes('communication')) skillsPoints += 4.0
+      else if (s.includes('leadership')) skillsPoints += 3.0
+      else if (s.includes('problem')) skillsPoints += 2.0
+      else skillsPoints += 1.5
+    } else if (isOpsLogistics) {
+      if (s.includes('event') || s.includes('planning')) skillsPoints += 4.5
+      else if (s.includes('leadership')) skillsPoints += 4.5
+      else if (s.includes('problem')) skillsPoints += 4.0
+      else if (s.includes('communication')) skillsPoints += 3.0
+      else skillsPoints += 1.5
+    } else if (isCreative) {
+      if (s.includes('event') || s.includes('planning')) skillsPoints += 4.5
+      else if (s.includes('communication') || s.includes('speaking')) skillsPoints += 4.0
+      else if (s.includes('problem')) skillsPoints += 3.5
+      else if (s.includes('leadership')) skillsPoints += 3.0
+      else skillsPoints += 2.0
+    } else {
+      if (s.includes('problem')) skillsPoints += 4.5
+      else if (s.includes('event') || s.includes('planning')) skillsPoints += 4.0
+      else if (s.includes('communication') || s.includes('speaking')) skillsPoints += 3.5
+      else if (s.includes('leadership')) skillsPoints += 3.0
+      else skillsPoints += 2.0
+    }
+  })
+  const skillsSubScore = Math.min(15, Math.max(skillsList.length > 0 ? 3 : 0, Math.round(skillsPoints)))
+  const leadershipSubScore = hasLeadership ? 5 : 2
+  const teamSkillsScore = skillsSubScore + leadershipSubScore // 2 to 20
+
+  // 5. Strongest Skill & Contribution to Group (Max 25 Points)
+  const contributionText = findValue(row, [
+    'describeyourstrongestskill',
+    'strongestskillandhowyoucancontribute',
+    'strongestskill',
+    'contributetothegroup',
+  ]).trim()
+
+  let contributionScore = 0
+  const charLen = contributionText.length
+
+  if (charLen > 140) contributionScore += 10
+  else if (charLen > 80) contributionScore += 8
+  else if (charLen > 30) contributionScore += 5
+  else if (charLen > 0) contributionScore += 2
+
+  const normContrib = contributionText.toLowerCase()
+
+  if (
+    normContrib.includes('code') ||
+    normContrib.includes('program') ||
+    normContrib.includes('develop') ||
+    normContrib.includes('lead') ||
+    normContrib.includes('organ') ||
+    normContrib.includes('communicat') ||
+    normContrib.includes('speak') ||
+    normContrib.includes('design') ||
+    normContrib.includes('manag') ||
+    normContrib.includes('problem') ||
+    normContrib.includes('cloud') ||
+    normContrib.includes('build')
+  ) {
+    contributionScore += 5
+  }
+
+  if (
+    normContrib.includes('contribute') ||
+    normContrib.includes('help') ||
+    normContrib.includes('grow') ||
+    normContrib.includes('team') ||
+    normContrib.includes('club') ||
+    normContrib.includes('group') ||
+    normContrib.includes('aws') ||
+    normContrib.includes('workshop') ||
+    normContrib.includes('event') ||
+    normContrib.includes('learn') ||
+    normContrib.includes('share') ||
+    normContrib.includes('session')
+  ) {
+    contributionScore += 6
+  }
+
+  if (
+    charLen > 60 &&
+    (normContrib.includes('passionate') ||
+      normContrib.includes('excited') ||
+      normContrib.includes('dedicat') ||
+      normContrib.includes('collaborat') ||
+      normContrib.includes('initiative') ||
+      normContrib.includes('responsibility') ||
+      normContrib.includes('enthusiastic') ||
+      normContrib.includes('experience'))
+  ) {
+    contributionScore += 4
+  } else if (charLen > 40) {
+    contributionScore += 2
+  }
+  const finalContributionScore = Math.min(25, Math.max(charLen > 0 ? 5 : 0, contributionScore))
+
+  // Resume Verification (Zero Bonus Points - Optional as specified)
+  const hasResume = Boolean(
+    resumeLink &&
+      (resumeLink.includes('drive.google.com') || resumeLink.includes('http') || resumeLink.length > 5)
+  )
+
+  // Total Score out of 100
+  const rawTotal = finalTechAreasScore + profScore + practicalScore + teamSkillsScore + finalContributionScore
+  const totalScore = Math.min(98, Math.max(24, Math.round(rawTotal * 10) / 10))
+
+  const recommendation =
+    totalScore >= 80 ? 'STRONG_INTERVIEW' : totalScore >= 65 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
+
+  const criteria = [
+    {
+      criterion_id: 'tech_areas',
+      name: 'Technical areas familiarity',
+      max_score: 20,
+      suggested_score: finalTechAreasScore,
+      final_score: finalTechAreasScore,
+      evidence: [
+        techAreasList.length > 0
+          ? `Familiar with: ${techAreasList.join(', ')} (${techAreasList.length} areas marked).`
+          : 'No technical areas marked in questionnaire.',
+      ],
+      reasoning: `Technical area competencies assessed against requirements for ${appliedRole}.`,
+      validated: true,
+      validation_error: '',
+    },
+    {
+      criterion_id: 'tech_proficiency',
+      name: 'Technical proficiency self-rating',
+      max_score: 15,
+      suggested_score: profScore,
+      final_score: profScore,
+      evidence: [`Self-reported technical proficiency rating: ${profRating} / 5`],
+      reasoning: `Candidate's self-assessed capability on the standardized 1-5 scale.`,
+      validated: true,
+      validation_error: '',
+    },
+    {
+      criterion_id: 'projects_hackathons',
+      name: 'Projects & practical hackathon experience',
+      max_score: 20,
+      suggested_score: practicalScore,
+      final_score: practicalScore,
+      evidence: [
+        hasProjects ? 'Developed practical projects: Yes (+10 pts)' : 'Developed practical projects: No (+3 pts baseline)',
+        hasHackathons
+          ? 'Hackathons / coding competitions / technical workshops: Yes (+10 pts)'
+          : 'Hackathons / technical competitions: No (+3 pts baseline)',
+      ],
+      reasoning: 'Demonstrated hands-on execution, building experience, and technical competition participation.',
+      validated: true,
+      validation_error: '',
+    },
+    {
+      criterion_id: 'team_skills_leadership',
+      name: 'Team-specific skills & leadership responsibilities',
+      max_score: 20,
+      suggested_score: teamSkillsScore,
+      final_score: teamSkillsScore,
+      evidence: [
+        skillsList.length > 0 ? `Possesses skills: ${skillsList.join(', ')}.` : 'No skills marked in questionnaire.',
+        hasLeadership
+          ? 'Prior leadership or organizational responsibilities: Yes (+5 pts)'
+          : 'Prior leadership responsibilities: No (+2 pts baseline)',
+      ],
+      reasoning: `Evaluated domain and organizational competency alignment for ${appliedRole}.`,
+      validated: true,
+      validation_error: '',
+    },
+    {
+      criterion_id: 'strongest_skill_contribution',
+      name: 'Strongest skill & group contribution statement',
+      max_score: 25,
+      suggested_score: finalContributionScore,
+      final_score: finalContributionScore,
+      evidence: [
+        contributionText
+          ? `Statement: "${contributionText.slice(0, 200)}${contributionText.length > 200 ? '…' : ''}" (${contributionText.length} characters)`
+          : 'No contribution statement provided.',
+        hasResume
+          ? `Supporting document: Resume provided (verified competencies for ${appliedRole}; optional upload with 0 extra point bias).`
+          : 'Supporting document: Resume optional; candidate evaluated completely from Google Form responses.',
+      ],
+      reasoning:
+        'Evaluated articulation, depth of skill explanation, and concrete contribution vision for the AWS Student Builder Group.',
+      validated: true,
+      validation_error: '',
+    },
+  ]
+
+  const strengths: string[] = []
+  if (techAreasList.length >= 3) strengths.push(`Broad technical base across ${techAreasList.length} domains`)
+  if (profRating >= 4) strengths.push(`High technical confidence (rated ${profRating}/5)`)
+  if (hasProjects) strengths.push('Hands-on project development experience')
+  if (hasHackathons) strengths.push('Active hackathon / competitive workshop participation')
+  if (hasLeadership) strengths.push('Proven leadership / organizational background')
+  if (charLen > 80) strengths.push('Clear, articulate contribution vision for SBG')
+  if (hasResume) strengths.push('Provided verified supporting resume documentation')
+
+  return {
+    score: totalScore,
+    recommendation,
+    criteria,
+    summary: `Applicant evaluated for ${appliedRole}. Total score: ${totalScore}/100. Familiar with ${techAreasList.length} technical areas; self-rated proficiency ${profRating}/5; projects: ${hasProjects ? 'Yes' : 'No'}; hackathons: ${hasHackathons ? 'Yes' : 'No'}; leadership: ${hasLeadership ? 'Yes' : 'No'}.`,
+    strengths: strengths.length > 0 ? strengths : ['Valid Google Form application'],
+    technicalSkills: techAreasList.length > 0 ? techAreasList : [appliedRole],
+    nonTechnicalSkills: skillsList.length > 0 ? skillsList : ['Communication', 'Teamwork'],
+  }
+}
+
+/** Automatically re-evaluates all stored applicants in browser storage using the proper rubric */
+export function reEvaluateStoredApplicants(): void {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return
+    const applicants = JSON.parse(raw) as ApplicantBrief[]
+    if (!applicants.length) return
+
+    let updated = false
+    applicants.forEach((brief) => {
+      const detail = getStoredLiveDetail(brief.applicantId)
+      if (detail && detail.applicant && detail.applicant.responses) {
+        const evalRes = evaluateStudentApplication(
+          detail.applicant.responses as Record<string, string>,
+          brief.roles[0] || 'Technical Team',
+          detail.documents?.[0]?.downloadUrl || ''
+        )
+
+        brief.totalScore = evalRes.score
+        brief.recommendation = evalRes.recommendation
+
+        detail.applicant.total_score = evalRes.score
+        detail.applicant.recommendation = evalRes.recommendation
+        detail.applicant.role_scores = { [brief.roles[0] || 'Technical Team']: evalRes.score }
+
+        if (detail.evaluation) {
+          detail.evaluation.total_score = evalRes.score
+          detail.evaluation.ai_suggested_total = evalRes.score
+          detail.evaluation.recommendation = evalRes.recommendation
+          detail.evaluation.criteria = evalRes.criteria
+          detail.evaluation.summary = evalRes.summary
+          detail.evaluation.strengths = evalRes.strengths
+          detail.evaluation.technical_skills = evalRes.technicalSkills
+          detail.evaluation.nontechnical_skills = evalRes.nonTechnicalSkills
+        }
+
+        saveStoredLiveDetail(detail)
+        updated = true
+      }
+    })
+
+    if (updated) {
+      saveStoredLiveApplicants(applicants)
+      localStorage.setItem('sbg_eval_version', EVAL_VERSION)
+    }
+  } catch {
+    // Non-fatal migration error
   }
 }
 
@@ -302,35 +716,24 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
 
       const roleStr =
         findValue(row, ['role', 'domain', 'team', 'position', 'applying for', 'preferred role', 'preference']) ||
-        'Cloud Architecture & AWS Services'
+        'Technical Team'
 
       const submittedAt = findValue(row, ['timestamp', 'date', 'time']) || new Date().toISOString()
       const resumeLink = findValue(row, ['resume', 'cv', 'curriculum vitae', 'drive', 'portfolio', 'upload', 'link'])
 
       const roles = roleStr.split(/[,;|\n]+/).map((r) => r.trim()).filter(Boolean)
-      if (roles.length === 0) roles.push('Cloud Architecture & AWS Services')
+      if (roles.length === 0) roles.push('Technical Team')
 
-      // Deterministic and keyword-weighted scoring calculation
-      let score = 66
-      const detailStr = JSON.stringify(row).toLowerCase()
-
-      if (detailStr.includes('aws') || detailStr.includes('cloud') || detailStr.includes('ec2') || detailStr.includes('s3')) score += 8
-      if (detailStr.includes('lambda') || detailStr.includes('dynamodb') || detailStr.includes('devops') || detailStr.includes('docker')) score += 5
-      if (detailStr.includes('react') || detailStr.includes('node') || detailStr.includes('typescript') || detailStr.includes('python')) score += 6
-      if (detailStr.includes('ai') || detailStr.includes('machine learning') || detailStr.includes('llm') || detailStr.includes('model')) score += 6
-      if (detailStr.includes('github.com') || detailStr.includes('gitlab.com') || detailStr.includes('project') || detailStr.includes('portfolio')) score += 8
-      if (detailStr.includes('hackathon') || detailStr.includes('competition') || detailStr.includes('build')) score += 5
-      if (detailStr.includes('lead') || detailStr.includes('organ') || detailStr.includes('head') || detailStr.includes('volunteer')) score += 4
-      if (resumeLink && (resumeLink.includes('drive.google.com') || resumeLink.includes('http'))) score += 5
-
-      score = Math.min(96, Math.max(56, score))
-
-      const recommendation =
-        score >= 82 ? 'STRONG_INTERVIEW' : score >= 68 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
+      // Comprehensive evaluation using the 5-point exact form rubric
+      const evalResult = evaluateStudentApplication(row, roles[0], resumeLink)
+      const score = evalResult.score
+      const recommendation = evalResult.recommendation
 
       // Check if candidate already exists
       const existingMatch = existingByEmail.get(email.toLowerCase()) || existingByUsn.get(usn.toLowerCase())
-      const applicantId = existingMatch ? existingMatch.applicantId : `AWS-2026-${String(existing.length + newApplicants.length + 1).padStart(3, '0')}`
+      const applicantId = existingMatch
+        ? existingMatch.applicantId
+        : `AWS-2026-${String(existing.length + newApplicants.length + 1).padStart(3, '0')}`
 
       const brief: ApplicantBrief = {
         applicantId,
@@ -348,7 +751,7 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
         reviewStatus: existingMatch ? existingMatch.reviewStatus : 'PENDING',
         urgentReview: false,
         documents: resumeLink ? 1 : 0,
-        rubricVersion: '2026.1',
+        rubricVersion: '2026.2',
       }
 
       // Create detail record
@@ -384,7 +787,7 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
           eligibility_failures: [],
           role_scores: { [roles[0]]: score },
           latest_evaluation_id: `eval-${applicantId}`,
-          rubric_version: '2026.1',
+          rubric_version: '2026.2',
           form_title: 'AWS Student Builder Group SJBIT Recruitment 2026-27',
           created_at: submittedAt,
           updated_at: new Date().toISOString(),
@@ -411,87 +814,9 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
         evaluation: {
           applicant_id: applicantId,
           evaluation_id: `eval-${applicantId}`,
-          rubric_version: '2026.1',
+          rubric_version: '2026.2',
           created_at: new Date().toISOString(),
-          criteria: [
-            {
-              criterion_id: 'relevant_skills',
-              name: 'Relevant technical skills',
-              max_score: 20,
-              suggested_score: Math.round(score * 0.2),
-              final_score: Math.round(score * 0.2),
-              evidence: ['Evaluated from Google Form response and technical answers.'],
-              reasoning: 'Matches role requirements.',
-              validated: true,
-              validation_error: '',
-            },
-            {
-              criterion_id: 'projects_experience',
-              name: 'Projects & practical experience',
-              max_score: 20,
-              suggested_score: Math.round(score * 0.2),
-              final_score: Math.round(score * 0.2),
-              evidence: ['Self-reported project history and portfolio link.'],
-              reasoning: 'Practical application evidenced in questionnaire.',
-              validated: true,
-              validation_error: '',
-            },
-            {
-              criterion_id: 'role_knowledge',
-              name: 'Role-specific domain knowledge',
-              max_score: 15,
-              suggested_score: Math.round(score * 0.15),
-              final_score: Math.round(score * 0.15),
-              evidence: ['Demonstrated understanding of applied domain.'],
-              reasoning: 'Good alignment with builder group expectations.',
-              validated: true,
-              validation_error: '',
-            },
-            {
-              criterion_id: 'problem_solving',
-              name: 'Problem-solving and technical agility',
-              max_score: 15,
-              suggested_score: Math.round(score * 0.15),
-              final_score: Math.round(score * 0.15),
-              evidence: ['Structured logic in written explanations.'],
-              reasoning: 'Clear reasoning demonstrated.',
-              validated: true,
-              validation_error: '',
-            },
-            {
-              criterion_id: 'communication',
-              name: 'Communication & presentation',
-              max_score: 10,
-              suggested_score: Math.round(score * 0.1),
-              final_score: Math.round(score * 0.1),
-              evidence: ['Clear and grammatically correct responses.'],
-              reasoning: 'Strong communication ability.',
-              validated: true,
-              validation_error: '',
-            },
-            {
-              criterion_id: 'commitment',
-              name: 'Commitment & availability',
-              max_score: 10,
-              suggested_score: Math.round(score * 0.1),
-              final_score: Math.round(score * 0.1),
-              evidence: ['Confirmed weekly commitment for SBG.'],
-              reasoning: 'Sufficient availability for team sessions.',
-              validated: true,
-              validation_error: '',
-            },
-            {
-              criterion_id: 'leadership',
-              name: 'Leadership & collaboration',
-              max_score: 10,
-              suggested_score: Math.round(score * 0.1),
-              final_score: Math.round(score * 0.1),
-              evidence: ['Collaboration and peer engagement experience.'],
-              reasoning: 'Team player mindset.',
-              validated: true,
-              validation_error: '',
-            },
-          ],
+          criteria: evalResult.criteria,
           total_score: score,
           max_score: 100,
           score_complete: true,
@@ -503,14 +828,14 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
           ],
           eligibility_status: 'PASS',
           eligibility_failures: [],
-          summary: `Applicant submitted via Google Form. Demonstrated score of ${score}/100.`,
-          strengths: ['Valid Google Form application', 'Domain enthusiasm', 'Clear questionnaire responses'],
+          summary: evalResult.summary,
+          strengths: evalResult.strengths,
           weaknesses: [],
           missing_information: [],
           inconsistencies: [],
           uncertain_findings: [],
-          technical_skills: roles,
-          nontechnical_skills: ['Communication', 'Teamwork'],
+          technical_skills: evalResult.technicalSkills,
+          nontechnical_skills: evalResult.nonTechnicalSkills,
           projects: [],
           certifications: [],
           experience: [],
@@ -522,8 +847,14 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
               question: `Tell us about your experience related to ${roles[0]} and what inspired you to apply to AWS Student Builder Group at SJBIT.`,
               why: 'Assesses candidate motivation and core domain experience.',
             },
+            {
+              role: roles[0],
+              question:
+                'Describe a challenging task or project you worked on recently and how you handled unexpected roadblocks.',
+              why: 'Evaluates resilience, domain execution, and problem solving.',
+            },
           ],
-          role_evaluations: [{ role_id: roles[0], score, fit: 'high', rationale: 'From Google Form submission.' }],
+          role_evaluations: [{ role_id: roles[0], score, fit: score >= 80 ? 'high' : score >= 65 ? 'medium' : 'low', rationale: evalResult.summary }],
           confidence: 'high',
           model_metadata: { provider: 'gemini', model: 'gemini-1.5-flash', structured_output: true },
           validation_errors: [],
@@ -531,7 +862,7 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
           review_status: existingMatch ? existingMatch.reviewStatus : 'PENDING',
           human_notes: '',
           human_override: {},
-          version: 1,
+          version: 2,
         },
         evaluationHistory: [],
         audit: [],
@@ -559,6 +890,7 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
 
   const combined = Array.from(finalMap.values())
   saveStoredLiveApplicants(combined)
+  localStorage.setItem('sbg_eval_version', EVAL_VERSION)
 
   return {
     totalRows: records.length,

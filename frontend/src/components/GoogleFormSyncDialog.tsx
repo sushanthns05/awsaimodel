@@ -11,12 +11,12 @@ import {
   Sparkles,
   Upload,
 } from 'lucide-react'
-import { api } from '../lib/api'
 import {
   clearStoredLiveApplicants,
   getStoredLiveApplicants,
   importGoogleFormResponses,
   parseCSV,
+  syncGoogleSheetFromUrl,
 } from '../lib/googleSync'
 import { Button } from './ui/button'
 import { Dialog } from './ui/dialog'
@@ -56,82 +56,12 @@ export function GoogleFormSyncDialog({ open, onOpenChange }: Props) {
     setLoading(true)
 
     try {
-      // 1. Extract spreadsheet ID and optional sheet gid
-      const match = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/)
-      const sheetId = match ? match[1] : (trimmed.length > 20 && !trimmed.includes('/') ? trimmed : null)
-
-      if (!sheetId) {
-        throw new Error('Could not identify a valid Google Spreadsheet ID in the link. Please check the URL.')
+      const result = await syncGoogleSheetFromUrl(trimmed, forceFresh)
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to sync Google Sheet')
       }
-
-      const gidMatch = trimmed.match(/[#?&]gid=([0-9]+)/)
-      const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : ''
-
-      // 2. Fetch CSV directly from Google Sheets using multiple endpoints
-      let csvData = ''
-      const candidates = [
-        `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv${gidParam}`,
-        `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gidParam ? `&gid=${gidMatch![1]}` : ''}`,
-        `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`,
-        `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`,
-      ]
-
-      let isRestricted = false
-      for (const endpoint of candidates) {
-        try {
-          const resp = await fetch(endpoint)
-          if (resp.ok) {
-            const text = await resp.text()
-            if (text.includes('<!DOCTYPE') || text.includes('<html') || text.includes('accounts.google.com')) {
-              isRestricted = true
-              continue
-            }
-            if (text.trim().length > 0) {
-              csvData = text
-              break
-            }
-          }
-        } catch {
-          // Continue to next endpoint
-        }
-      }
-
-      // If direct browser fetch failed, try backend sync endpoint as fallback
-      if (!csvData) {
-        try {
-          const res = await api.syncGoogleSheet(trimmed)
-          if (res && res.imported > 0) {
-            setMessage(`Successfully imported and evaluated ${res.imported} applicants from Google Sheet!`)
-            await queryClient.invalidateQueries()
-            return
-          }
-        } catch {
-          // Backend offline or failed
-        }
-
-        if (isRestricted) {
-          throw new Error(
-            'The Google Sheet is currently restricted. In your Google Sheet, click "Share" (top-right) → under General Access change "Restricted" to "Anyone with the link can view" → then click Sync Real Responses Now again. Or export the Sheet as CSV and upload it in the "Upload CSV" tab.',
-          )
-        }
-
-        throw new Error(
-          'Could not reach the Google Sheet. Please ensure General Access is set to "Anyone with the link can view". Alternatively, open the sheet, click File → Download → Comma Separated Values (.csv), and upload it via the "Upload CSV" tab.',
-        )
-      }
-
-      // 3. Parse CSV rows
-      const records = parseCSV(csvData)
-      if (records.length === 0) {
-        throw new Error(
-          'Connected to Google Sheet, but found 0 response rows. Ensure the sheet has received responses.',
-        )
-      }
-
-      // 4. Ingest and score applicants
-      const result = importGoogleFormResponses(records, forceFresh)
       setMessage(
-        `Successfully loaded ${result.totalRows} responses from Google Sheet! All ${result.totalRows} applicants are evaluated and live in your dashboard.`,
+        `Successfully loaded ${result.totalRows} real responses from Google Sheet! All ${result.totalRows} applicants are evaluated and live in your dashboard.`,
       )
       await queryClient.invalidateQueries()
     } catch (err) {

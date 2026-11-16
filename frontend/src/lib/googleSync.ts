@@ -147,6 +147,135 @@ export function parseCSV(text: string): Record<string, string>[] {
   return records
 }
 
+export interface SheetSyncResponse {
+  success: boolean
+  imported: number
+  totalRows: number
+  applicants: ApplicantBrief[]
+  error?: string
+}
+
+/** Fetches real-time CSV from Google Sheets via GViz/Export and evaluates responses immediately */
+export async function syncGoogleSheetFromUrl(
+  sheetUrlInput: string,
+  reset = false
+): Promise<SheetSyncResponse> {
+  const trimmed = sheetUrlInput.trim()
+  if (!trimmed) {
+    return {
+      success: false,
+      imported: 0,
+      totalRows: 0,
+      applicants: getStoredLiveApplicants(),
+      error: 'Please paste your Google Sheet link or spreadsheet ID.',
+    }
+  }
+
+  // 1. Extract spreadsheet ID and optional sheet gid
+  const match = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/)
+  const sheetId = match ? match[1] : (trimmed.length > 20 && !trimmed.includes('/') ? trimmed : null)
+
+  if (!sheetId) {
+    return {
+      success: false,
+      imported: 0,
+      totalRows: 0,
+      applicants: getStoredLiveApplicants(),
+      error: 'Could not identify a valid Google Spreadsheet ID in the link. Please check the URL.',
+    }
+  }
+
+  const gidMatch = trimmed.match(/[#?&]gid=([0-9]+)/)
+  const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : ''
+
+  // 2. Fetch CSV directly from Google Sheets using multiple endpoints
+  let csvData = ''
+  const candidates = [
+    `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv${gidParam}`,
+    `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gidParam ? `&gid=${gidMatch![1]}` : ''}`,
+    `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`,
+    `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`,
+  ]
+
+  let isRestricted = false
+  for (const endpoint of candidates) {
+    try {
+      const resp = await fetch(endpoint)
+      if (resp.ok) {
+        const text = await resp.text()
+        if (text.includes('<!DOCTYPE') || text.includes('<html') || text.includes('accounts.google.com')) {
+          isRestricted = true
+          continue
+        }
+        if (text.trim().length > 0) {
+          csvData = text
+          break
+        }
+      }
+    } catch {
+      // Continue to next endpoint
+    }
+  }
+
+  if (!csvData) {
+    if (isRestricted) {
+      return {
+        success: false,
+        imported: 0,
+        totalRows: 0,
+        applicants: getStoredLiveApplicants(),
+        error:
+          'The Google Sheet is currently restricted. In your Google Sheet, click "Share" → under General Access change to "Anyone with the link can view".',
+      }
+    }
+    return {
+      success: false,
+      imported: 0,
+      totalRows: 0,
+      applicants: getStoredLiveApplicants(),
+      error:
+        'Could not reach the Google Sheet. Please ensure General Access is set to "Anyone with the link can view".',
+    }
+  }
+
+  // 3. Parse CSV rows with RFC 4180
+  const records = parseCSV(csvData)
+  if (records.length === 0) {
+    return {
+      success: false,
+      imported: 0,
+      totalRows: 0,
+      applicants: getStoredLiveApplicants(),
+      error: 'Connected to Google Sheet, but found 0 response rows. Ensure the form has received submissions.',
+    }
+  }
+
+  // 4. Ingest real responses into live storage
+  const syncResult = importGoogleFormResponses(records, reset)
+  localStorage.setItem('sbg_last_sheet_url', trimmed)
+  localStorage.setItem('sbg_last_synced_at', new Date().toISOString())
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('sbg:realtime-synced', {
+        detail: {
+          totalRows: syncResult.totalRows,
+          imported: syncResult.imported,
+          totalApplicants: syncResult.applicants.length,
+          timestamp: new Date().toISOString(),
+        },
+      })
+    )
+  }
+
+  return {
+    success: true,
+    imported: syncResult.imported,
+    totalRows: syncResult.totalRows,
+    applicants: syncResult.applicants,
+  }
+}
+
 function normaliseText(str: string): string {
   return (str || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 }

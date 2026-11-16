@@ -63,16 +63,25 @@ export function OverviewPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-lg border border-aws-orange/40 bg-amber-50/80 px-4 py-2.5 text-xs text-amber-950">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-lg border border-emerald-300 bg-emerald-50/90 px-4 py-2.5 text-xs text-emerald-950 shadow-sm">
         <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-aws-orange shrink-0" />
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+          </span>
           <span>
-            <strong>Connected Google Form</strong>: AWS Student Builder Group SJBIT Recruitment 2026-27.
+            <strong>Real-Time Google Form Pipeline</strong>: Linked to official SJBIT Recruitment 2026–27 Form. Submissions auto-sync in real time.
           </span>
         </div>
-        <Button variant="accent" size="sm" className="h-7 text-xs shrink-0" onClick={() => setSyncDialogOpen(true)}>
-          <Sparkles className="h-3 w-3 mr-1" /> Sync Form Responses
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="h-7 text-xs bg-white border-emerald-300 text-emerald-900 hover:bg-emerald-100" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCw className={`h-3 w-3 mr-1 ${isFetching ? 'animate-spin text-aws-orange' : ''}`} />
+            Refresh
+          </Button>
+          <Button variant="accent" size="sm" className="h-7 text-xs shrink-0" onClick={() => setSyncDialogOpen(true)}>
+            <Sparkles className="h-3 w-3 mr-1" /> Configure Sheet
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">

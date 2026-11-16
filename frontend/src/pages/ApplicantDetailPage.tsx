@@ -166,8 +166,15 @@ export function ApplicantDetailPage() {
   async function openDocument(documentId: string) {
     setOpeningDocument(documentId)
     try {
+      const doc = data?.documents.find((d) => d.document_id === documentId)
+      if (doc?.downloadUrl && (doc.downloadUrl.startsWith('http') || doc.downloadUrl.includes('drive.google.com'))) {
+        window.open(doc.downloadUrl, '_blank', 'noopener,noreferrer')
+        return
+      }
       const result = await api.documentUrl(applicantId, documentId)
-      window.open(result.url, '_blank', 'noopener,noreferrer')
+      if (result.url && result.url !== '#') {
+        window.open(result.url, '_blank', 'noopener,noreferrer')
+      }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Unable to open document')
     } finally {

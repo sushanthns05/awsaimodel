@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Download, Filter, Search, Sparkles, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Filter, RefreshCw, Search, Sparkles, X } from 'lucide-react'
 import { api, type ApplicantFilters } from '../lib/api'
 import { useAuth } from '../hooks/useAuth'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
@@ -115,6 +115,9 @@ export function ApplicantsPage() {
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="accent" size="sm" onClick={() => setSyncDialogOpen(true)}>
             <Sparkles className="h-3.5 w-3.5" /> Sync Form Responses
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin text-aws-orange' : ''}`} /> Refresh
           </Button>
           {can('reports') ? (
             <Button variant="outline" size="sm" onClick={() => void exportExcel()} disabled={exporting}>

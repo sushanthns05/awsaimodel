@@ -42,6 +42,7 @@ export function initials(name?: string): string {
 
 export function humanise(value?: string | null): string {
   if (!value) return '—'
+  if (value.includes(' ') || value.includes('?') || value.includes('.')) return value
   return value
     .toLowerCase()
     .split('_')

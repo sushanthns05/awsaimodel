@@ -19,6 +19,14 @@ const STATUSES = ['RECEIVED', 'QUEUED', 'EXTRACTING', 'EXTRACTED', 'EVALUATING',
 const RECOMMENDATIONS = ['STRONG_INTERVIEW', 'INTERVIEW_CONSIDERATION', 'MANUAL_REVIEW', 'ELIGIBILITY_REVIEW', 'NEEDS_REVIEW']
 const REVIEW_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'MANUAL_REVIEW']
 
+const DEFAULT_COMMUNITY_ROLES = [
+  { id: 'technical_team', name: 'Technical Team' },
+  { id: 'event_pr_management', name: 'Event and PR Management' },
+  { id: 'creative_decoration', name: 'Creative and Decoration' },
+  { id: 'social_media_marketing_outreach', name: 'Social Media, Marketing and Outreach' },
+  { id: 'operations_logistics', name: 'Operations and Logistics' },
+]
+
 export function ApplicantsPage() {
   const navigate = useNavigate()
   const { can } = useAuth()
@@ -39,7 +47,7 @@ export function ApplicantsPage() {
   const [syncDialogOpen, setSyncDialogOpen] = useState(false)
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings, staleTime: 300_000 })
-  const roles = settings?.roles?.roles ?? []
+  const roles = settings?.roles?.roles?.length ? settings.roles.roles : DEFAULT_COMMUNITY_ROLES
 
   const filters = useMemo<ApplicantFilters>(
     () => ({

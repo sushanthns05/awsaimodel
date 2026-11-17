@@ -3,11 +3,18 @@ import {
   getMockApplicantDetail,
   getMockApplicantsList,
   getMockOverview,
-  getMockShortlist,
   mockReportsList,
   mockSettings,
 } from './mockData'
-import { importGoogleFormResponses, parseCSV } from './googleSync'
+import {
+  importGoogleFormResponses,
+  parseCSV,
+  getStoredLiveDetail,
+  saveStoredLiveDetail,
+  getStoredLiveApplicants,
+  saveStoredLiveApplicants,
+  canonicalizeRole,
+} from './googleSync'
 import type {
   AdminList,
   ApplicantDetail,
@@ -64,37 +71,321 @@ interface RequestOptions {
 function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | undefined {
   _isDemoMode = true
   if (path.startsWith('/dashboard/overview')) return getMockOverview() as unknown as T
+
   if (path.startsWith('/intake/upload-csv')) {
     const b = (body as { csv_text?: string }) || {}
     const records = parseCSV(b.csv_text || '')
     const result = importGoogleFormResponses(records)
     return { total_rows: result.totalRows, imported: result.imported, skipped_duplicates: 0 } as unknown as T
   }
+
+  // Handle manual score override
+  if (path.startsWith('/applicants/') && path.includes('/evaluation')) {
+    const id = decodeURIComponent(path.replace('/applicants/', '').split('/')[0])
+    const b = (body as { scores?: Record<string, number>; reason?: string }) || {}
+    const scores = b.scores || {}
+    const detail = getStoredLiveDetail(id)
+    if (detail && detail.evaluation) {
+      let total = 0
+      detail.evaluation.criteria.forEach((crit) => {
+        if (scores[crit.criterion_id] !== undefined) {
+          const val = Number(scores[crit.criterion_id])
+          crit.final_score = Math.min(crit.max_score, Math.max(0, val))
+          crit.suggested_score = crit.final_score
+        }
+        total += crit.final_score
+      })
+      total = Math.min(100, Math.max(0, Math.round(total * 10) / 10))
+      const rec = total >= 80 ? 'STRONG_INTERVIEW' : total >= 65 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
+
+      detail.evaluation.total_score = total
+      detail.evaluation.ai_suggested_total = total
+      detail.evaluation.recommendation = rec
+      detail.evaluation.human_notes = b.reason || 'Manually corrected criterion scores'
+      detail.applicant.total_score = total
+      detail.applicant.recommendation = rec
+      detail.applicant.role_scores = { [canonicalizeRole(detail.applicant.roles[0])]: total }
+      detail.brief.totalScore = total
+      detail.brief.recommendation = rec
+
+      detail.audit.push({
+        audit_id: `aud-${Date.now()}`,
+        applicant_id: id,
+        reviewer: 'admin@sjbit.edu.in',
+        action: 'MANUAL_SCORE_OVERRIDE',
+        timestamp: new Date().toISOString(),
+        previous_value: detail.evaluation.total_score,
+        updated_value: total,
+        reason: b.reason || 'Manual score correction',
+        metadata: { scores, totalScore: total },
+      })
+      detail.evaluationHistory.push({
+        evaluationId: `override-${Date.now()}`,
+        totalScore: total,
+        recommendation: rec,
+        createdAt: new Date().toISOString(),
+        rubricVersion: detail.evaluation.rubric_version || '2026.2',
+        reviewStatus: detail.applicant.review_status || 'PENDING',
+        scoreComplete: true,
+        model: 'manual-override',
+        validationErrors: [],
+        humanOverride: { scores, totalScore: total, reason: b.reason || 'Manual score correction' },
+      })
+
+      saveStoredLiveDetail(detail)
+
+      const all = getStoredLiveApplicants()
+      const match = all.find((a) => a.applicantId === id)
+      if (match) {
+        match.totalScore = total
+        match.recommendation = rec
+        saveStoredLiveApplicants(all)
+      }
+
+      return { applicantId: id, totalScore: total, recommendation: rec } as unknown as T
+    }
+    return { applicantId: id, totalScore: 0, recommendation: 'MANUAL_REVIEW' } as unknown as T
+  }
+
+  // Handle single applicant review decision
   if (path.startsWith('/applicants/') && path.includes('/review')) {
+    const id = decodeURIComponent(path.replace('/applicants/', '').split('/')[0])
     const b = (body as Record<string, string>) || {}
-    return { applicantId: 'AWS-2026-001', reviewStatus: b.decision || 'APPROVED', decision: b.decision || 'APPROVED' } as unknown as T
+    const decision = b.decision || 'APPROVED'
+    const status = decision === 'SHORTLISTED' || decision === 'APPROVED' ? 'APPROVED' : decision === 'REJECTED' ? 'REJECTED' : 'PENDING'
+
+    const detail = getStoredLiveDetail(id)
+    if (detail) {
+      detail.brief.reviewStatus = status
+      detail.applicant.review_status = status
+      detail.applicant.review_decision = decision
+      detail.applicant.review_notes = b.notes || b.reason || ''
+      detail.applicant.reviewed_by = 'admin@sjbit.edu.in'
+      if (detail.evaluation) {
+        detail.evaluation.review_status = status
+        detail.evaluation.human_notes = b.notes || b.reason || ''
+      }
+      detail.audit.push({
+        audit_id: `aud-${Date.now()}`,
+        applicant_id: id,
+        reviewer: 'admin@sjbit.edu.in',
+        action: 'HUMAN_REVIEW',
+        timestamp: new Date().toISOString(),
+        previous_value: detail.applicant.review_status,
+        updated_value: status,
+        reason: b.notes || b.reason || '',
+        metadata: { decision, notes: b.notes },
+      })
+      saveStoredLiveDetail(detail)
+    }
+
+    const all = getStoredLiveApplicants()
+    const match = all.find((a) => a.applicantId === id)
+    if (match) {
+      match.reviewStatus = status
+      saveStoredLiveApplicants(all)
+    }
+
+    return { applicantId: id, reviewStatus: status, decision } as unknown as T
   }
+
   if (path.startsWith('/applicants/') && path.includes('/url')) {
-    return { url: '#', filename: 'Resume.pdf', expiresInSeconds: 900 } as unknown as T
+    const id = decodeURIComponent(path.replace('/applicants/', '').split('/')[0])
+    const detail = getStoredLiveDetail(id)
+    const dl = detail?.documents?.[0]?.downloadUrl
+    return { url: dl || '#', filename: 'Resume.pdf', expiresInSeconds: 900 } as unknown as T
   }
+
   if (path.startsWith('/applicants/')) {
     const id = decodeURIComponent(path.replace('/applicants/', '').split('/')[0])
     return getMockApplicantDetail(id) as unknown as T
   }
-  if (path.startsWith('/applicants')) {
-    const items = getMockApplicantsList()
+
+  // Handle applicants directory with full real-time filtering and sorting
+  if (path.startsWith('/applicants?') || path === '/applicants') {
+    let items = getMockApplicantsList()
+
+    const queryPart = path.includes('?') ? path.split('?')[1] : ''
+    const params = new URLSearchParams(queryPart)
+
+    const q = params.get('q')?.toLowerCase().trim() || ''
+    const role = params.get('role')?.toLowerCase().trim() || ''
+    const status = params.get('status')?.trim() || ''
+    const eligibility = params.get('eligibility')?.trim() || ''
+    const recommendation = params.get('recommendation')?.trim() || ''
+    const reviewStatus = params.get('reviewStatus')?.trim() || ''
+    const minScore = params.has('minScore') && params.get('minScore') !== '' ? Number(params.get('minScore')) : null
+    const maxScore = params.has('maxScore') && params.get('maxScore') !== '' ? Number(params.get('maxScore')) : null
+    const sort = params.get('sort') || 'submitted_at'
+    const pageSize = Number(params.get('pageSize')) || 25
+
+    if (q) {
+      items = items.filter(
+        (a) =>
+          a.fullName.toLowerCase().includes(q) ||
+          a.email.toLowerCase().includes(q) ||
+          a.usn.toLowerCase().includes(q) ||
+          a.department.toLowerCase().includes(q) ||
+          a.roles.some((r) => r.toLowerCase().includes(q))
+      )
+    }
+
+    if (role && role !== 'all') {
+      items = items.filter((a) =>
+        a.roles.some((r) => {
+          const c = canonicalizeRole(r).toLowerCase()
+          const rId = c.replace(/[^a-z0-9]/g, '_')
+          return c === role || rId === role || c.includes(role) || r.toLowerCase().includes(role)
+        })
+      )
+    }
+
+    if (status) {
+      items = items.filter((a) => a.processingStatus === status)
+    }
+
+    if (eligibility) {
+      items = items.filter((a) => a.eligibilityStatus === eligibility)
+    }
+
+    if (recommendation) {
+      items = items.filter((a) => a.recommendation === recommendation)
+    }
+
+    if (reviewStatus) {
+      items = items.filter((a) => a.reviewStatus === reviewStatus)
+    }
+
+    if (minScore !== null && !isNaN(minScore)) {
+      items = items.filter((a) => a.totalScore >= minScore)
+    }
+
+    if (maxScore !== null && !isNaN(maxScore)) {
+      items = items.filter((a) => a.totalScore <= maxScore)
+    }
+
+    if (sort === 'score_desc' || sort === 'totalScore') {
+      items.sort((a, b) => b.totalScore - a.totalScore)
+    } else if (sort === 'score_asc') {
+      items.sort((a, b) => a.totalScore - b.totalScore)
+    } else if (sort === 'name_asc') {
+      items.sort((a, b) => a.fullName.localeCompare(b.fullName))
+    } else {
+      items.sort((a, b) => {
+        const da = new Date(a.submittedAt).getTime() || 0
+        const db = new Date(b.submittedAt).getTime() || 0
+        return db - da
+      })
+    }
+
     return {
       items,
       nextCursor: null,
-      pageSize: 25,
+      pageSize,
       count: items.length,
     } as unknown as T
   }
+
+  // Handle bulk shortlist decisions
   if (path.startsWith('/shortlist/bulk')) {
-    const b = (body as { applicantIds?: string[]; decision?: string }) || {}
-    return { updated: b.applicantIds || [], skipped: [], decision: b.decision || 'APPROVED' } as unknown as T
+    const b = (body as { applicantIds?: string[]; decision?: string; notes?: string; reason?: string }) || {}
+    const ids = new Set(b.applicantIds || [])
+    const dec = b.decision || 'APPROVED'
+    const status = dec === 'SHORTLISTED' || dec === 'APPROVED' ? 'APPROVED' : dec === 'REJECTED' ? 'REJECTED' : 'PENDING'
+
+    const all = getStoredLiveApplicants()
+    all.forEach((app) => {
+      if (ids.has(app.applicantId)) {
+        app.reviewStatus = status as 'APPROVED' | 'REJECTED' | 'PENDING'
+        const detail = getStoredLiveDetail(app.applicantId)
+        if (detail) {
+          detail.brief.reviewStatus = status as 'APPROVED' | 'REJECTED' | 'PENDING'
+          detail.applicant.review_status = status as 'APPROVED' | 'REJECTED' | 'PENDING'
+          detail.applicant.review_decision = dec
+          detail.applicant.review_notes = b.notes || b.reason || ''
+          detail.applicant.reviewed_by = 'admin@sjbit.edu.in'
+          if (detail.evaluation) {
+            detail.evaluation.review_status = status as 'APPROVED' | 'REJECTED' | 'PENDING'
+            detail.evaluation.human_notes = b.notes || b.reason || ''
+          }
+          detail.audit.push({
+            audit_id: `aud-${Date.now()}`,
+            applicant_id: app.applicantId,
+            reviewer: 'admin@sjbit.edu.in',
+            action: 'BULK_DECISION',
+            timestamp: new Date().toISOString(),
+            previous_value: app.reviewStatus,
+            updated_value: status,
+            reason: b.reason || b.notes || '',
+            metadata: { decision: dec, reason: b.reason },
+          })
+          saveStoredLiveDetail(detail)
+        }
+      }
+    })
+    saveStoredLiveApplicants(all)
+    return { updated: Array.from(ids), skipped: [], decision: dec } as unknown as T
   }
-  if (path.startsWith('/shortlist')) return getMockShortlist() as unknown as T
+
+  // Handle shortlist query with role, minScore, maxScore
+  if (path.startsWith('/shortlist?') || path === '/shortlist') {
+    const queryPart = path.includes('?') ? path.split('?')[1] : ''
+    const params = new URLSearchParams(queryPart)
+
+    const role = params.get('role')?.toLowerCase().trim() || ''
+    const minScore = params.has('minScore') && params.get('minScore') !== '' ? Number(params.get('minScore')) : null
+    const maxScore = params.has('maxScore') && params.get('maxScore') !== '' ? Number(params.get('maxScore')) : null
+    const limit = Number(params.get('limit')) || 300
+
+    let list = getStoredLiveApplicants()
+
+    if (role && role !== 'all') {
+      list = list.filter((a) =>
+        a.roles.some((r) => {
+          const c = canonicalizeRole(r).toLowerCase()
+          const rId = c.replace(/[^a-z0-9]/g, '_')
+          return c === role || rId === role || c.includes(role) || r.toLowerCase().includes(role)
+        })
+      )
+    }
+
+    if (minScore !== null && !isNaN(minScore)) {
+      list = list.filter((a) => a.totalScore >= minScore)
+    }
+
+    if (maxScore !== null && !isNaN(maxScore)) {
+      list = list.filter((a) => a.totalScore <= maxScore)
+    }
+
+    list.sort((a, b) => b.totalScore - a.totalScore)
+
+    return {
+      items: list.slice(0, limit).map((app, index) => ({
+        applicantId: app.applicantId,
+        fullName: app.fullName,
+        email: app.email,
+        usn: app.usn,
+        department: app.department,
+        yearOfStudy: app.yearOfStudy,
+        roles: app.roles.map(canonicalizeRole),
+        roleScore: app.totalScore,
+        totalScore: app.totalScore,
+        recommendation: app.recommendation,
+        eligibilityStatus: app.eligibilityStatus,
+        eligibilityFailures: [],
+        reviewStatus: app.reviewStatus,
+        reviewDecision: app.reviewStatus === 'APPROVED' ? 'SHORTLISTED' : app.reviewStatus === 'REJECTED' ? 'REJECTED' : 'PENDING',
+        reviewedBy: '',
+        strongestEvidence: ['Responses verified against official rubric requirements.'],
+        concerns: [],
+        urgentReview: app.urgentReview,
+        documents: app.documents,
+        rank: index + 1,
+      })),
+      total: list.length,
+      role: role || 'all',
+    } as unknown as T
+  }
   if (path.startsWith('/reports/generate')) {
     return {
       report_id: `REP-${Date.now()}`,

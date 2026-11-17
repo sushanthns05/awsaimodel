@@ -27,6 +27,14 @@ import type { ShortlistItem } from '../types'
 
 type SortKey = 'roleScore' | 'totalScore' | 'rank' | 'fullName'
 
+const DEFAULT_COMMUNITY_ROLES = [
+  { id: 'technical_team', name: 'Technical Team' },
+  { id: 'event_pr_management', name: 'Event and PR Management' },
+  { id: 'creative_decoration', name: 'Creative and Decoration' },
+  { id: 'social_media_marketing_outreach', name: 'Social Media, Marketing and Outreach' },
+  { id: 'operations_logistics', name: 'Operations and Logistics' },
+]
+
 export function ShortlistPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -46,7 +54,7 @@ export function ShortlistPage() {
   const [actionError, setActionError] = useState('')
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings, staleTime: 300_000 })
-  const roles = settings?.roles?.roles ?? []
+  const roles = settings?.roles?.roles?.length ? settings.roles.roles : DEFAULT_COMMUNITY_ROLES
 
   const queryParams = useMemo(
     () => ({
@@ -85,6 +93,7 @@ export function ShortlistPage() {
       setActionError('')
       void queryClient.invalidateQueries({ queryKey: ['shortlist'] })
       void queryClient.invalidateQueries({ queryKey: ['overview'] })
+      void queryClient.invalidateQueries({ queryKey: ['applicants'] })
     },
     onError: (err: Error) => setActionError(err.message),
   })

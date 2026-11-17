@@ -9,7 +9,45 @@ export interface SyncResult {
 
 const STORAGE_KEY = 'sbg_live_applicants'
 const DETAILS_KEY = 'sbg_live_applicant_details'
-const EVAL_VERSION = '2026.2_proper_rubric'
+const EVAL_VERSION = '2026.3_community_roles'
+
+export const COMMUNITY_ROLES = [
+  'Technical Team',
+  'Event and PR Management',
+  'Creative and Decoration',
+  'Social Media, Marketing and Outreach',
+  'Operations and Logistics',
+] as const
+
+export function canonicalizeRole(input: string): string {
+  const norm = (input || '').toLowerCase().trim()
+  if (!norm) return 'Technical Team'
+  if (
+    norm.includes('tech') ||
+    norm.includes('cloud') ||
+    norm.includes('code') ||
+    norm.includes('program') ||
+    norm.includes('developer') ||
+    norm.includes('full stack') ||
+    norm.includes('ai') ||
+    norm.includes('ml')
+  ) {
+    return 'Technical Team'
+  }
+  if (norm.includes('event') || (norm.includes('pr') && !norm.includes('program')) || norm.includes('public relations')) {
+    return 'Event and PR Management'
+  }
+  if (norm.includes('creat') || norm.includes('decor') || norm.includes('design') || norm.includes('art')) {
+    return 'Creative and Decoration'
+  }
+  if (norm.includes('social') || norm.includes('market') || norm.includes('outreach') || norm.includes('media')) {
+    return 'Social Media, Marketing and Outreach'
+  }
+  if (norm.includes('operat') || norm.includes('logistic') || norm.includes('manage')) {
+    return 'Operations and Logistics'
+  }
+  return 'Technical Team'
+}
 
 export function getStoredLiveApplicants(): ApplicantBrief[] {
   try {
@@ -306,9 +344,23 @@ export function computeLiveOverview(applicants: ApplicantBrief[]): Overview {
 
   const roleStatsMap: Record<string, RoleStat> = {}
 
+  COMMUNITY_ROLES.forEach((cr) => {
+    const roleId = cr.toLowerCase().replace(/[^a-z0-9]/g, '_')
+    roleStatsMap[roleId] = {
+      roleId,
+      name: cr,
+      applicants: 0,
+      processed: 0,
+      eligible: 0,
+      shortlisted: 0,
+      averageScore: 0,
+      strongRecommendations: 0,
+    }
+  })
+
   applicants.forEach((app) => {
-    app.roles.forEach((r) => {
-      const roleName = r.trim() || 'General'
+    const canonRoles = (app.roles.length ? app.roles : ['Technical Team']).map(canonicalizeRole)
+    canonRoles.forEach((roleName) => {
       const roleId = roleName.toLowerCase().replace(/[^a-z0-9]/g, '_')
       if (!roleStatsMap[roleId]) {
         roleStatsMap[roleId] = {
@@ -333,7 +385,11 @@ export function computeLiveOverview(applicants: ApplicantBrief[]): Overview {
   // Compute average score per role
   Object.values(roleStatsMap).forEach((st) => {
     const roleScores = applicants
-      .filter((a) => a.roles.some((r) => r.toLowerCase().replace(/[^a-z0-9]/g, '_') === st.roleId))
+      .filter((a) =>
+        (a.roles.length ? a.roles : ['Technical Team'])
+          .map(canonicalizeRole)
+          .some((r) => r.toLowerCase().replace(/[^a-z0-9]/g, '_') === st.roleId)
+      )
       .map((a) => a.totalScore)
     st.averageScore = roleScores.length
       ? Math.round((roleScores.reduce((a, b) => a + b, 0) / roleScores.length) * 10) / 10
@@ -411,29 +467,12 @@ export function evaluateStudentApplication(
   appliedRole: string,
   resumeLink: string
 ): ApplicationEvaluation {
-  const normRole = normaliseText(appliedRole)
-  const isTechRole =
-    normRole.includes('tech') ||
-    normRole.includes('cloud') ||
-    normRole.includes('full') ||
-    normRole.includes('dev') ||
-    normRole.includes('ai') ||
-    normRole.includes('ml') ||
-    normRole.includes('architect')
-  const isEventPR =
-    normRole.includes('event') ||
-    normRole.includes('pr') ||
-    normRole.includes('media') ||
-    normRole.includes('public')
-  const isOpsLogistics =
-    normRole.includes('operat') ||
-    normRole.includes('logistic') ||
-    normRole.includes('manage')
-  const isCreative =
-    normRole.includes('creat') ||
-    normRole.includes('decor') ||
-    normRole.includes('design') ||
-    normRole.includes('art')
+  const canRole = canonicalizeRole(appliedRole)
+  const isTechRole = canRole === 'Technical Team'
+  const isEventPR = canRole === 'Event and PR Management'
+  const isCreative = canRole === 'Creative and Decoration'
+  const isSocialMedia = canRole === 'Social Media, Marketing and Outreach'
+  const isOpsLogistics = canRole === 'Operations and Logistics'
 
   // 1. Technical Areas Familiarity (Max 20 Points)
   const techAreasRaw = findValue(row, [
@@ -556,6 +595,12 @@ export function evaluateStudentApplication(
       else if (s.includes('communication') || s.includes('speaking')) skillsPoints += 4.0
       else if (s.includes('problem')) skillsPoints += 3.5
       else if (s.includes('leadership')) skillsPoints += 3.0
+      else skillsPoints += 2.0
+    } else if (isSocialMedia) {
+      if (s.includes('communication') || s.includes('speaking')) skillsPoints += 4.5
+      else if (s.includes('event') || s.includes('planning')) skillsPoints += 4.0
+      else if (s.includes('leadership')) skillsPoints += 3.5
+      else if (s.includes('problem')) skillsPoints += 3.0
       else skillsPoints += 2.0
     } else {
       if (s.includes('problem')) skillsPoints += 4.5
@@ -763,9 +808,14 @@ export function reEvaluateStoredApplicants(): void {
     applicants.forEach((brief) => {
       const detail = getStoredLiveDetail(brief.applicantId)
       if (detail && detail.applicant && detail.applicant.responses) {
+        const canonRoles = (brief.roles.length ? brief.roles : ['Technical Team']).map(canonicalizeRole)
+        brief.roles = canonRoles
+        detail.applicant.roles = canonRoles
+        detail.brief.roles = canonRoles
+
         const evalRes = evaluateStudentApplication(
           detail.applicant.responses as Record<string, string>,
-          brief.roles[0] || 'Technical Team',
+          canonRoles[0],
           detail.documents?.[0]?.downloadUrl || ''
         )
 
@@ -774,7 +824,7 @@ export function reEvaluateStoredApplicants(): void {
 
         detail.applicant.total_score = evalRes.score
         detail.applicant.recommendation = evalRes.recommendation
-        detail.applicant.role_scores = { [brief.roles[0] || 'Technical Team']: evalRes.score }
+        detail.applicant.role_scores = { [canonRoles[0]]: evalRes.score }
 
         if (detail.evaluation) {
           detail.evaluation.total_score = evalRes.score
@@ -850,8 +900,8 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
       const submittedAt = findValue(row, ['timestamp', 'date', 'time']) || new Date().toISOString()
       const resumeLink = findValue(row, ['resume', 'cv', 'curriculum vitae', 'drive', 'portfolio', 'upload', 'link'])
 
-      const roles = roleStr.split(/[,;|\n]+/).map((r) => r.trim()).filter(Boolean)
-      if (roles.length === 0) roles.push('Technical Team')
+      const rawRoles = roleStr.split(/[,;|\n]+/).map((r) => r.trim()).filter(Boolean)
+      const roles = (rawRoles.length ? rawRoles : ['Technical Team']).map(canonicalizeRole)
 
       // Comprehensive evaluation using the 5-point exact form rubric
       const evalResult = evaluateStudentApplication(row, roles[0], resumeLink)

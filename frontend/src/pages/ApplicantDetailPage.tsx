@@ -21,6 +21,7 @@ import { formatDate, formatScore, humanise, initials } from '../lib/utils'
 import { EmptyState, ErrorState, PageLoader } from '../components/States'
 import { ScoreBadge, RecommendationBadge, StatusBadge, EligibilityBadge, ReviewBadge } from '../components/StatusBadges'
 import { Button } from '../components/ui/button'
+import { generateApplicantPdf } from '../lib/applicantPdfGenerator'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Select } from '../components/ui/select'
 import { Textarea } from '../components/ui/textarea'
@@ -94,6 +95,14 @@ function CriterionRow({ criterion, evaluation }: { criterion: CriterionScore; ev
   )
 }
 
+const DEFAULT_COMMUNITY_ROLES = [
+  { id: 'technical_team', name: 'Technical Team' },
+  { id: 'event_pr_management', name: 'Event and PR Management' },
+  { id: 'creative_decoration', name: 'Creative and Decoration' },
+  { id: 'social_media_marketing_outreach', name: 'Social Media, Marketing and Outreach' },
+  { id: 'operations_logistics', name: 'Operations and Logistics' },
+]
+
 export function ApplicantDetailPage() {
   const { applicantId = '' } = useParams()
   const navigate = useNavigate()
@@ -131,13 +140,19 @@ export function ApplicantDetailPage() {
   })
 
   const overrideMutation = useMutation({
-    mutationFn: () => api.overrideScores(applicantId, { scores: overrideScores, reason: overrideReason }),
-    onSuccess: () => {
+    mutationFn: () =>
+      api.overrideScores(applicantId, {
+        scores: overrideScores,
+        reason: overrideReason.trim() || 'Score reviewed and adjusted by administrator',
+      }),
+    onSuccess: (res) => {
       setOverrideOpen(false)
-      setMessage('Manual score override saved with audit trail.')
+      setMessage(`Manual score override saved! New score: ${formatScore(res.totalScore)} / 100 (${res.recommendation.replace(/_/g, ' ')})`)
       setActionError('')
       void queryClient.invalidateQueries({ queryKey: ['applicant', applicantId] })
+      void queryClient.invalidateQueries({ queryKey: ['applicants'] })
       void queryClient.invalidateQueries({ queryKey: ['overview'] })
+      void queryClient.invalidateQueries({ queryKey: ['shortlist'] })
     },
     onError: (err: Error) => setActionError(err.message),
   })
@@ -153,7 +168,7 @@ export function ApplicantDetailPage() {
 
   const applicant = data?.applicant
   const evaluation = data?.evaluation ?? null
-  const roleNames = settings?.roles?.roles ?? []
+  const roleNames = settings?.roles?.roles?.length ? settings.roles.roles : DEFAULT_COMMUNITY_ROLES
 
   const knownAnswers = useMemo(() => {
     if (!applicant) return []
@@ -185,9 +200,14 @@ export function ApplicantDetailPage() {
   async function downloadApplicantPdf() {
     setActionError('')
     try {
-      const report = await api.generateReport({ type: 'pdf_applicant', scope: { applicant_id: applicantId } })
-      if (report.downloadUrl) window.open(report.downloadUrl, '_blank', 'noopener,noreferrer')
-      else setMessage('Applicant PDF is being generated. Check Reports for the download.')
+      if (data) {
+        generateApplicantPdf(data)
+        setMessage('Applicant PDF dossier generated and downloaded successfully.')
+      } else {
+        const report = await api.generateReport({ type: 'pdf_applicant', scope: { applicant_id: applicantId } })
+        if (report.downloadUrl && report.downloadUrl !== '#') window.open(report.downloadUrl, '_blank', 'noopener,noreferrer')
+        else setMessage('Applicant PDF is being generated. Check Reports for the download.')
+      }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Unable to generate applicant report')
     }
@@ -720,7 +740,7 @@ export function ApplicantDetailPage() {
             <Button
               variant="accent"
               onClick={() => overrideMutation.mutate()}
-              disabled={overrideMutation.isPending || overrideReason.trim().length < 5}
+              disabled={overrideMutation.isPending}
             >
               <Save className="h-4 w-4" /> {overrideMutation.isPending ? 'Saving…' : 'Save override'}
             </Button>

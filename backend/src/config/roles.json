@@ -5,6 +5,7 @@
     {
       "id": "student_builder_group_leader",
       "name": "Student Builder Group Leader",
+      "aliases": ["SBG Leader", "Group Leader", "Student Builder Leader", "Leader"],
       "description": "Owns the group's direction, represents the community, plans the semester calendar and supports every team lead.",
       "evaluation_focus": [
         "Ownership of a community or team",
@@ -27,6 +28,7 @@
     {
       "id": "technical_team",
       "name": "Technical Team",
+      "aliases": ["Technical", "Tech", "Cloud", "Development", "Programming"],
       "description": "Builds workshops, demos and community projects; supports cloud, AI and web tracks.",
       "evaluation_focus": [
         "Programming and cloud fundamentals",
@@ -48,6 +50,7 @@
     {
       "id": "social_media",
       "name": "Social Media",
+      "aliases": ["Social Media, Marketing and Outreach", "social_media_marketing_outreach", "Social Media and Marketing", "SMO"],
       "description": "Runs the group's public presence, creates platform-native content and measures reach and engagement.",
       "evaluation_focus": [
         "Platform understanding",
@@ -69,6 +72,7 @@
     {
       "id": "marketing_outreach",
       "name": "Marketing & Outreach",
+      "aliases": ["Marketing & Outreach", "Marketing and Outreach", "Outreach", "Marketing"],
       "description": "Drives participation, partnerships and sponsorship outreach across the campus and beyond.",
       "evaluation_focus": [
         "Audience understanding",
@@ -90,6 +94,7 @@
     {
       "id": "creative_design",
       "name": "Creative & Design",
+      "aliases": ["Creative & Design", "Creative and Design", "Creative and Decoration", "creative_decoration", "Decoration", "Design", "Creative"],
       "description": "Designs posters, decks, event identities and digital assets for the group.",
       "evaluation_focus": [
         "Design craft evidence",
@@ -111,6 +116,7 @@
     {
       "id": "operations_logistics",
       "name": "Operations & Logistics",
+      "aliases": ["Operations & Logistics", "Operations and Logistics", "Operations", "Logistics", "Ops"],
       "description": "Owns event operations, vendor coordination, budgets and on-ground execution.",
       "evaluation_focus": [
         "Planning and checklists",
@@ -132,6 +138,7 @@
     {
       "id": "event_management",
       "name": "Event Management",
+      "aliases": ["Event and PR Management", "Event & PR Management", "Event and PR", "Event PR Management", "event_pr_management", "PR", "Public Relations", "Events"],
       "description": "Plans and runs workshops, hackathons and community events end to end.",
       "evaluation_focus": [
         "Event ownership",
@@ -153,6 +160,7 @@
     {
       "id": "community_management",
       "name": "Community Management",
+      "aliases": ["Community", "Community Management"],
       "description": "Grows and supports the student community, moderates channels and runs engagement programmes.",
       "evaluation_focus": [
         "Community participation",
@@ -174,6 +182,7 @@
     {
       "id": "other",
       "name": "Other",
+      "aliases": ["Other"],
       "description": "Custom or emerging role defined by the recruitment administrators.",
       "evaluation_focus": ["Relevant evidence described by the applicant"],
       "interview_topics": ["Role expectations", "Relevant experience"],

@@ -14,6 +14,7 @@ import {
   getStoredLiveApplicants,
   saveStoredLiveApplicants,
   canonicalizeRole,
+  roleMatchesFilter,
 } from './googleSync'
 import type {
   AdminList,
@@ -231,13 +232,7 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
     }
 
     if (role && role !== 'all') {
-      items = items.filter((a) =>
-        a.roles.some((r) => {
-          const c = canonicalizeRole(r).toLowerCase()
-          const rId = c.replace(/[^a-z0-9]/g, '_')
-          return c === role || rId === role || c.includes(role) || r.toLowerCase().includes(role)
-        })
-      )
+      items = items.filter((a) => a.roles.some((r) => roleMatchesFilter(r, role)))
     }
 
     if (status) {
@@ -342,14 +337,8 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
 
     if (role && role !== 'all') {
       list = list.filter((a) => {
-        const matchesP1 = a.priority1 && (
-          canonicalizeRole(a.priority1.role).toLowerCase() === role ||
-          a.priority1.role.toLowerCase().replace(/[^a-z0-9]/g, '_') === role
-        )
-        const matchesP2 = a.priority2 && (
-          canonicalizeRole(a.priority2.role).toLowerCase() === role ||
-          a.priority2.role.toLowerCase().replace(/[^a-z0-9]/g, '_') === role
-        )
+        const matchesP1 = Boolean(a.priority1 && roleMatchesFilter(a.priority1.role, role))
+        const matchesP2 = Boolean(a.priority2 && roleMatchesFilter(a.priority2.role, role))
 
         if (priority === 'P1') return matchesP1
         if (priority === 'P2') return matchesP2
@@ -363,14 +352,8 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
       let activePriority: 'Priority 1' | 'Priority 2' = 'Priority 1'
 
       if (role && role !== 'all') {
-        const isP1 = app.priority1 && (
-          canonicalizeRole(app.priority1.role).toLowerCase() === role ||
-          app.priority1.role.toLowerCase().replace(/[^a-z0-9]/g, '_') === role
-        )
-        const isP2 = app.priority2 && (
-          canonicalizeRole(app.priority2.role).toLowerCase() === role ||
-          app.priority2.role.toLowerCase().replace(/[^a-z0-9]/g, '_') === role
-        )
+        const isP1 = Boolean(app.priority1 && roleMatchesFilter(app.priority1.role, role))
+        const isP2 = Boolean(app.priority2 && roleMatchesFilter(app.priority2.role, role))
 
         if (priority === 'P2' && isP2) {
           activeScore = app.priority2?.score ?? app.totalScore
@@ -416,11 +399,7 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
         activeRolePriority: activePriority,
         shortlistPriority: app.shortlistPriority,
         isShortlistPriorityRole: Boolean(
-          role &&
-            role !== 'all' &&
-            app.shortlistPriority &&
-            (canonicalizeRole(app.shortlistPriority.role).toLowerCase() === role ||
-              app.shortlistPriority.role.toLowerCase().replace(/[^a-z0-9]/g, '_') === role)
+          role && role !== 'all' && app.shortlistPriority && roleMatchesFilter(app.shortlistPriority.role, role)
         ),
       }
     })
@@ -645,8 +624,9 @@ export const api = {
       body: { reason },
     }),
 
-  shortlist: (params: { role?: string; minScore?: number; maxScore?: number; limit?: number } = {}) =>
-    request<ShortlistResponse>(`/shortlist${query(params)}`),
+  shortlist: (
+    params: { role?: string; priority?: string; minScore?: number; maxScore?: number; limit?: number } = {}
+  ) => request<ShortlistResponse>(`/shortlist${query(params)}`),
 
   bulkDecision: (body: { applicantIds: string[]; decision: string; notes?: string; reason?: string }) =>
     request<{ updated: string[]; skipped: { applicantId: string; reason: string }[]; decision: string }>(

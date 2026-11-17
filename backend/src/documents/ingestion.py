@@ -114,14 +114,26 @@ def match_role(value: str, roles_config: dict[str, Any]) -> Optional[str]:
 
 
 def normalise_roles(values: list[str], roles_config: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Resolve every explicitly selected role, including multi-select form answers.
+
+    A single form cell can contain more than one team (e.g. "Operations & Logistics
+    and Social Media"). Each choice is resolved independently so none are lost and
+    no role is ever inferred from free-text skills or department answers.
+    """
     resolved: list[str] = []
     unmapped: list[str] = []
     for value in values:
-        role_id = match_role(value, roles_config)
-        if role_id and role_id not in resolved:
-            resolved.append(role_id)
-        elif not role_id:
-            unmapped.append(value)
+        parts = [
+            part.strip()
+            for part in re.split(r"[,;/|\n]+|\s+and\s+(?=[A-Za-z])", str(value or ""), flags=re.IGNORECASE)
+            if part.strip()
+        ]
+        for part in parts or [str(value or "").strip()]:
+            role_id = match_role(part, roles_config)
+            if role_id and role_id not in resolved:
+                resolved.append(role_id)
+            elif not role_id:
+                unmapped.append(part)
     if not resolved:
         default = roles_config.get("default_role")
         if default:

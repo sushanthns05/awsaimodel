@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api, ApiError } from './api'
-import type { PagedApplicants } from '../types'
+import type { ApplicantBrief, PagedApplicants } from '../types'
 
 const SESSION_KEY = 'sbg.recruitment.session'
 
@@ -124,5 +124,61 @@ describe('api client', () => {
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toContain('/api/shortlist?role=social_media&limit=10')
     expect(init.body).toBeUndefined()
+  })
+})
+
+describe('offline fallback role filtering', () => {
+  function brief(id: string, roles: string[]): ApplicantBrief {
+    return {
+      applicantId: id,
+      fullName: `Applicant ${id}`,
+      email: `${id}@sjbit.edu.in`,
+      usn: id.toUpperCase(),
+      department: 'CSE',
+      yearOfStudy: '3rd Year',
+      roles,
+      submittedAt: '2026-01-01T00:00:00.000Z',
+      processingStatus: 'COMPLETED',
+      totalScore: 80,
+      recommendation: 'STRONG_INTERVIEW',
+      eligibilityStatus: 'PASS',
+      reviewStatus: 'PENDING',
+      urgentReview: false,
+      documents: 0,
+      rubricVersion: '2026.2',
+    }
+  }
+
+  beforeEach(() => {
+    localStorage.setItem('sbg_eval_version', '2026.6_applied_roles_only')
+    localStorage.setItem(
+      'sbg_live_applicants',
+      JSON.stringify([
+        brief('technical', ['Technical Team']),
+        brief('operations', ['Operations and Logistics']),
+        brief('social', ['Social Media, Marketing and Outreach']),
+        brief('event', ['Event and PR Management']),
+        brief('creative', ['Creative and Decoration']),
+      ])
+    )
+    fetchMock.mockRejectedValue(new Error('offline'))
+  })
+
+  it('filters the applicant directory for every role, not only technical roles', async () => {
+    const cases: [string, string][] = [
+      ['technical_team', 'technical'],
+      ['operations_logistics', 'operations'],
+      ['social_media', 'social'],
+      ['social_media_marketing_outreach', 'social'],
+      ['event_management', 'event'],
+      ['event_pr_management', 'event'],
+      ['creative_design', 'creative'],
+      ['creative_decoration', 'creative'],
+    ]
+
+    for (const [role, expectedId] of cases) {
+      const result = await api.applicants({ role })
+      expect(result.items.map((item) => item.applicantId)).toEqual([expectedId])
+    }
   })
 })

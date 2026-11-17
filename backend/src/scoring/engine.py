@@ -8,6 +8,7 @@ replaced with assumed marks.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from ..common.models import (
@@ -42,12 +43,44 @@ def role_map(roles_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {str(role["id"]): role for role in roles_config.get("roles", [])}
 
 
+def _normalised_role_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def resolve_role_id(value: Any, roles_config: dict[str, Any]) -> Optional[str]:
+    """Resolve a role id, display name or configured alias to a canonical role id.
+
+    Applicant roles can arrive from the form with display labels such as
+    "Operations & Logistics" instead of the canonical "operations_logistics".
+    Resolving them here keeps prompts and scoring limited to the roles the
+    candidate actually applied for instead of silently defaulting to Technical.
+    """
+    key = _normalised_role_key(value)
+    if not key:
+        return None
+    roles = roles_config.get("roles", [])
+    for role in roles:
+        if _normalised_role_key(role.get("id", "")) == key:
+            return str(role["id"])
+    for role in roles:
+        if _normalised_role_key(role.get("name", "")) == key:
+            return str(role["id"])
+    for role in roles:
+        if any(_normalised_role_key(alias) == key for alias in role.get("aliases", [])):
+            return str(role["id"])
+    return None
+
+
 def normalise_role_ids(applicant_roles: list[str], roles_config: dict[str, Any]) -> list[str]:
     known = role_map(roles_config)
-    resolved = [role for role in applicant_roles if role in known]
+    resolved: list[str] = []
+    for role in applicant_roles:
+        role_id = resolve_role_id(role, roles_config)
+        if role_id and role_id in known and role_id not in resolved:
+            resolved.append(role_id)
     if not resolved:
         default = roles_config.get("default_role") or next(iter(known), "other")
-        resolved = [default]
+        resolved = [str(default)]
     return resolved
 
 

@@ -14,6 +14,7 @@ import { Select } from '../components/ui/select'
 import { Label } from '../components/ui/label'
 import { ScoreBadge, RecommendationBadge, StatusBadge, EligibilityBadge, ReviewBadge } from '../components/StatusBadges'
 import { GoogleFormSyncDialog } from '../components/GoogleFormSyncDialog'
+import { canonicalizeRole } from '../lib/googleSync'
 
 const STATUSES = ['RECEIVED', 'QUEUED', 'EXTRACTING', 'EXTRACTED', 'EVALUATING', 'SCORING', 'COMPLETED', 'NEEDS_REVIEW', 'FAILED']
 const RECOMMENDATIONS = ['STRONG_INTERVIEW', 'INTERVIEW_CONSIDERATION', 'MANUAL_REVIEW', 'ELIGIBILITY_REVIEW', 'NEEDS_REVIEW']
@@ -47,7 +48,7 @@ export function ApplicantsPage() {
   const [syncDialogOpen, setSyncDialogOpen] = useState(false)
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings, staleTime: 300_000 })
-  const roles = settings?.roles?.roles?.length ? settings.roles.roles : DEFAULT_COMMUNITY_ROLES
+  const roles = DEFAULT_COMMUNITY_ROLES
 
   const filters = useMemo<ApplicantFilters>(
     () => ({
@@ -322,7 +323,7 @@ export function ApplicantsPage() {
                                 {applicant.shortlistPriority?.role === applicant.priority1.role ? (
                                   <span title="Given priority for shortlisting into this role">🎯</span>
                                 ) : null}
-                                <span className="font-bold text-blue-700">P1:</span> {roles.find((r) => r.id === applicant.priority1?.role)?.name ?? applicant.priority1.role}
+                                <span className="font-bold text-blue-700">P1:</span> {canonicalizeRole(applicant.priority1.role)}
                               </span>
                               <span className="shrink-0 rounded bg-blue-200/60 px-1 text-[10px] font-bold text-blue-900">
                                 #{applicant.priority1.rank} ({applicant.priority1.score})
@@ -341,7 +342,7 @@ export function ApplicantsPage() {
                                 {applicant.shortlistPriority?.role === applicant.priority2.role ? (
                                   <span title="Given priority for shortlisting into this role">🎯</span>
                                 ) : null}
-                                <span className="font-bold text-purple-700">P2:</span> {roles.find((r) => r.id === applicant.priority2?.role)?.name ?? applicant.priority2.role}
+                                <span className="font-bold text-purple-700">P2:</span> {canonicalizeRole(applicant.priority2.role)}
                               </span>
                               <span className="shrink-0 rounded bg-purple-200/60 px-1 text-[10px] font-bold text-purple-900">
                                 #{applicant.priority2.rank} ({applicant.priority2.score})
@@ -351,7 +352,7 @@ export function ApplicantsPage() {
                             !applicant.priority1 &&
                             applicant.roles.map((item) => (
                               <span key={item} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
-                                {roles.find((r) => r.id === item)?.name ?? humanise(item)}
+                                {canonicalizeRole(item)}
                               </span>
                             ))
                           )}

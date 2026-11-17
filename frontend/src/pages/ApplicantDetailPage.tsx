@@ -22,6 +22,7 @@ import { EmptyState, ErrorState, PageLoader } from '../components/States'
 import { ScoreBadge, RecommendationBadge, StatusBadge, EligibilityBadge, ReviewBadge } from '../components/StatusBadges'
 import { Button } from '../components/ui/button'
 import { generateApplicantPdf } from '../lib/applicantPdfGenerator'
+import { canonicalizeRole } from '../lib/googleSync'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Select } from '../components/ui/select'
 import { Textarea } from '../components/ui/textarea'
@@ -95,14 +96,6 @@ function CriterionRow({ criterion, evaluation }: { criterion: CriterionScore; ev
   )
 }
 
-const DEFAULT_COMMUNITY_ROLES = [
-  { id: 'technical_team', name: 'Technical Team' },
-  { id: 'event_pr_management', name: 'Event and PR Management' },
-  { id: 'creative_decoration', name: 'Creative and Decoration' },
-  { id: 'social_media_marketing_outreach', name: 'Social Media, Marketing and Outreach' },
-  { id: 'operations_logistics', name: 'Operations and Logistics' },
-]
-
 export function ApplicantDetailPage() {
   const { applicantId = '' } = useParams()
   const navigate = useNavigate()
@@ -124,7 +117,6 @@ export function ApplicantDetailPage() {
     queryFn: () => api.applicant(applicantId),
     enabled: Boolean(applicantId),
   })
-  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings, staleTime: 300_000 })
 
   const reviewMutation = useMutation({
     mutationFn: (payload: { decision: string; notes: string; reason: string }) => api.review(applicantId, payload),
@@ -168,7 +160,6 @@ export function ApplicantDetailPage() {
 
   const applicant = data?.applicant
   const evaluation = data?.evaluation ?? null
-  const roleNames = settings?.roles?.roles?.length ? settings.roles.roles : DEFAULT_COMMUNITY_ROLES
 
   const knownAnswers = useMemo(() => {
     if (!applicant) return []
@@ -277,18 +268,18 @@ export function ApplicantDetailPage() {
                 <div className="mt-2 flex flex-wrap gap-2">
                   {applicant.priority1 ? (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-900">
-                      🥇 Priority 1: {roleNames.find((item) => item.id === applicant.priority1?.role)?.name ?? applicant.priority1.role} · Rank #{applicant.priority1.rank} ({applicant.priority1.score}/100)
+                      🥇 Priority 1: {canonicalizeRole(applicant.priority1.role)} · Rank #{applicant.priority1.rank} ({applicant.priority1.score}/100)
                     </span>
                   ) : null}
                   {applicant.priority2 ? (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-purple-200 bg-purple-50 px-2.5 py-0.5 text-xs font-semibold text-purple-900">
-                      🥈 Priority 2: {roleNames.find((item) => item.id === applicant.priority2?.role)?.name ?? applicant.priority2.role} · Rank #{applicant.priority2.rank} ({applicant.priority2.score}/100)
+                      🥈 Priority 2: {canonicalizeRole(applicant.priority2.role)} · Rank #{applicant.priority2.rank} ({applicant.priority2.score}/100)
                     </span>
                   ) : null}
                   {!applicant.priority1 &&
                     applicant.roles.map((role) => (
                       <span key={role} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                        {roleNames.find((item) => item.id === role)?.name ?? humanise(role)}
+                        {canonicalizeRole(role)}
                       </span>
                     ))}
                 </div>
@@ -358,7 +349,7 @@ export function ApplicantDetailPage() {
                   </span>
                 </div>
                 <h3 className="mt-0.5 text-base font-bold text-navy-900">
-                  Prioritized Role: <span className="text-emerald-700">{applicant.shortlist_priority.role}</span>
+                  Prioritized Role: <span className="text-emerald-700">{canonicalizeRole(applicant.shortlist_priority.role)}</span>
                 </h3>
                 <p className="mt-0.5 text-xs text-slate-600">
                   {applicant.shortlist_priority.reason}
@@ -476,7 +467,7 @@ export function ApplicantDetailPage() {
                               ) : null}
                             </div>
                             <p className="mt-1 text-sm font-bold text-navy-900">
-                              {roleNames.find((role) => role.id === item.role_id)?.name ?? humanise(item.role_id)}
+                              {canonicalizeRole(item.role_id)}
                             </p>
                           </div>
                           <ScoreBadge score={item.score} />
@@ -576,7 +567,7 @@ export function ApplicantDetailPage() {
                       <div key={`${question.question}-${index}`} className="rounded-lg border border-slate-200 px-3 py-2">
                         <p className="text-xs font-semibold text-navy-900">{index + 1}. {question.question}</p>
                         <p className="mt-0.5 text-[11px] text-slate-500">
-                          {roleNames.find((role) => role.id === question.role)?.name ?? humanise(question.role)}
+                          {canonicalizeRole(question.role)}
                           {question.why ? ` · ${question.why}` : ''}
                         </p>
                       </div>

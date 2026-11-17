@@ -16,44 +16,207 @@ export interface SyncResult {
 
 const STORAGE_KEY = 'sbg_live_applicants'
 const DETAILS_KEY = 'sbg_live_applicant_details'
-const EVAL_VERSION = '2026.5_fair_scoring_shortlist_priority'
+// Bumped to enforce strictly reading applied roles only and robust dual-priority score shortlisting
+const EVAL_VERSION = '2026.8_strict_applied_roles_fair_priority'
 
-export const COMMUNITY_ROLES = [
-  'Technical Team',
-  'Event and PR Management',
-  'Creative and Decoration',
-  'Social Media, Marketing and Outreach',
-  'Operations and Logistics',
-] as const
+export interface CommunityRole {
+  id: string
+  name: string
+  /** Backend role ids, display variants and common spellings that resolve to this role. */
+  aliases: string[]
+}
 
-export function canonicalizeRole(input: string): string {
-  const norm = (input || '').toLowerCase().trim()
-  if (!norm) return 'Technical Team'
+/**
+ * Single source of truth for the roles used by the live Google Form -> dashboard pipeline.
+ * The backend keeps a wider taxonomy (9 roles); these ids/aliases make either taxonomy
+ * resolve to the same canonical role so evaluation and filtering stay consistent.
+ */
+export const ROLE_DEFINITIONS: CommunityRole[] = [
+  {
+    id: 'technical_team',
+    name: 'Technical Team',
+    aliases: ['technical_team', 'technical team', 'technical', 'tech', 'cloud', 'developer', 'programming'],
+  },
+  {
+    id: 'event_pr_management',
+    name: 'Event and PR Management',
+    aliases: [
+      'event_pr_management',
+      'event_management',
+      'event and pr management',
+      'event & pr management',
+      'event and pr',
+      'event pr management',
+      'event',
+      'pr',
+      'public relations',
+    ],
+  },
+  {
+    id: 'creative_decoration',
+    name: 'Creative and Decoration',
+    aliases: [
+      'creative_decoration',
+      'creative_design',
+      'creative and decoration',
+      'creative & decoration',
+      'creative and design',
+      'creative & design',
+      'creative',
+      'decoration',
+      'design',
+      'art',
+    ],
+  },
+  {
+    id: 'social_media_marketing_outreach',
+    name: 'Social Media, Marketing and Outreach',
+    aliases: [
+      'social_media_marketing_outreach',
+      'social_media',
+      'marketing_outreach',
+      'social media, marketing and outreach',
+      'social media marketing and outreach',
+      'social media and marketing',
+      'social media',
+      'marketing and outreach',
+      'marketing & outreach',
+      'marketing',
+      'outreach',
+      'media',
+    ],
+  },
+  {
+    id: 'operations_logistics',
+    name: 'Operations and Logistics',
+    aliases: [
+      'operations_logistics',
+      'operations and logistics',
+      'operations & logistics',
+      'operations',
+      'logistics',
+    ],
+  },
+]
+
+export const COMMUNITY_ROLES: string[] = ROLE_DEFINITIONS.map((role) => role.name)
+
+function normaliseRoleKey(value: string): string {
+  return (value || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+/** Backend roles that have no live community equivalent, kept distinct from the five community roles. */
+const BACKEND_ONLY_ROLES: Record<string, string> = {
+  communitymanagement: 'community_management',
+  studentbuildergroupleader: 'student_builder_group_leader',
+  other: 'other',
+}
+
+/** Resolves any known role id, name, alias, or free-text variant to its canonical frontend role id. */
+export function roleIdFor(value: string): string {
+  const v = (value || '').toLowerCase().trim()
+  if (!v) return ''
+
+  // Fast direct keyword mapping covering all variations with or without "team", "&", "and", etc.
+  if (v.includes('operat') || v.includes('logistic')) {
+    return 'operations_logistics'
+  }
   if (
-    norm.includes('tech') ||
-    norm.includes('cloud') ||
-    norm.includes('code') ||
-    norm.includes('program') ||
-    norm.includes('developer') ||
-    norm.includes('full stack') ||
-    norm.includes('ai') ||
-    norm.includes('ml')
+    v.includes('social') ||
+    v.includes('market') ||
+    v.includes('outreach') ||
+    (v.includes('media') && !v.includes('immediate'))
   ) {
-    return 'Technical Team'
+    return 'social_media_marketing_outreach'
   }
-  if (norm.includes('event') || (norm.includes('pr') && !norm.includes('program')) || norm.includes('public relations')) {
-    return 'Event and PR Management'
+  if (v.includes('creat') || v.includes('decor') || v.includes('design') || v.includes('art')) {
+    return 'creative_decoration'
   }
-  if (norm.includes('creat') || norm.includes('decor') || norm.includes('design') || norm.includes('art')) {
-    return 'Creative and Decoration'
+  if (
+    v.includes('event') ||
+    v.includes('public relation') ||
+    (v.includes('pr') && !v.includes('program') && !v.includes('prior') && !v.includes('problem'))
+  ) {
+    return 'event_pr_management'
   }
-  if (norm.includes('social') || norm.includes('market') || norm.includes('outreach') || norm.includes('media')) {
-    return 'Social Media, Marketing and Outreach'
+  if (
+    v.includes('tech') ||
+    v.includes('cloud') ||
+    v.includes('code') ||
+    v.includes('develop') ||
+    v.includes('programming')
+  ) {
+    return 'technical_team'
   }
-  if (norm.includes('operat') || norm.includes('logistic') || norm.includes('manage')) {
-    return 'Operations and Logistics'
+
+  const key = normaliseRoleKey(value)
+  for (const role of ROLE_DEFINITIONS) {
+    if (normaliseRoleKey(role.id) === key || normaliseRoleKey(role.name) === key) return role.id
   }
-  return 'Technical Team'
+  for (const role of ROLE_DEFINITIONS) {
+    if (role.aliases.some((alias) => normaliseRoleKey(alias) === key)) return role.id
+  }
+  return BACKEND_ONLY_ROLES[key] || key
+}
+
+/** Canonical display name for a role id/name/alias; falls back to input string or Technical Team. */
+export function canonicalizeRole(input: string): string {
+  const id = roleIdFor(input)
+  if (!id) return (input || '').trim() || 'Technical Team'
+  const match = ROLE_DEFINITIONS.find((role) => role.id === id)
+  return match ? match.name : (input || '').trim() || 'Technical Team'
+}
+
+/** True when two role values (id, name or alias from either taxonomy) refer to the same role. */
+export function roleMatchesFilter(roleValue: string, filterValue: string): boolean {
+  if (!roleValue || !filterValue) return false
+  if (filterValue === 'all') return true
+  const roleId = roleIdFor(roleValue)
+  const filterId = roleIdFor(filterValue)
+  return Boolean(roleId && filterId && roleId === filterId)
+}
+
+/**
+ * Resolves a raw text fragment or single role option into one of the 5 canonical community role names,
+ * or null if it doesn't match any community role.
+ */
+export function resolveSingleCommunityRoleName(val: string): string | null {
+  const v = (val || '').toLowerCase().trim()
+  if (!v) return null
+
+  // Explicitly ignore known skills/competency answers from questions like "Which skills do you possess?"
+  if (
+    v.includes('programming and development') ||
+    v.includes('technical research') ||
+    v.includes('public speaking') ||
+    v.includes('problem solving')
+  ) {
+    return null
+  }
+
+  const roleId = roleIdFor(val)
+  if (roleId) {
+    const match = ROLE_DEFINITIONS.find((r) => r.id === roleId)
+    if (match) return match.name
+  }
+  return null
+}
+
+/**
+ * Extracts distinct community roles from a text string (e.g. from comma-separated checkbox answers).
+ */
+export function extractRolesFromText(text: string): string[] {
+  if (!text || !text.trim()) return []
+  // Split on commas, semicolons, pipes, slashes, newlines
+  const parts = text.split(/[,;\n|/]+/).map((p) => p.trim()).filter(Boolean)
+  const resolved: string[] = []
+  for (const part of parts) {
+    const roleName = resolveSingleCommunityRoleName(part)
+    if (roleName && !resolved.includes(roleName)) {
+      resolved.push(roleName)
+    }
+  }
+  return resolved
 }
 
 export function getStoredLiveApplicants(): ApplicantBrief[] {
@@ -338,166 +501,158 @@ function findValue(row: Record<string, string>, aliases: string[]): string {
 }
 
 /**
- * Extracts Priority 1 and Priority 2 choices from Google Form responses.
- * Detects explicit Priority 1/2 or Preference 1/2 fields, split multiple choices,
- * and ensures every candidate has both priorities assessed fairly.
+ * Extracts ONLY the roles the candidate explicitly selected in the Google Form.
+ * Priority 1 / Priority 2 columns take precedence; a single multi-select
+ * "Which team(s) are you applying for?" column fills any remaining slot.
+ * Skills, department, leadership, and essay answers are NEVER used to invent an
+ * applied role. If a candidate applied for only 1 role, priority2 is left empty.
  */
 export function extractApplicantPriorities(row: Record<string, string>): {
   priority1: string
   priority2: string
   roles: string[]
 } {
-  const p1Raw = findValue(row, [
-    'priority 1',
-    'priority1',
-    'preference 1',
-    'preference1',
-    '1st preference',
-    'first preference',
-    'preferred role 1',
-    'first choice',
-    'primary role',
-  ])
+  // Disallowed column substrings (non-role questions that must NEVER be parsed as role choices)
+  const isExcludedHeader = (normKey: string): boolean => {
+    return (
+      normKey.includes('skill') ||
+      normKey.includes('familiar') ||
+      normKey.includes('technicalarea') ||
+      normKey.includes('proficiency') ||
+      normKey.includes('hackathon') ||
+      normKey.includes('codingcompetition') ||
+      normKey.includes('workshop') ||
+      normKey.includes('project') ||
+      normKey.includes('leadership') ||
+      normKey.includes('organizational') ||
+      normKey.includes('responsibility') ||
+      normKey.includes('responsibilities') ||
+      normKey.includes('contribute') ||
+      normKey.includes('strongest') ||
+      normKey.includes('describe') ||
+      normKey.includes('statement') ||
+      normKey.includes('email') ||
+      normKey.includes('fullname') ||
+      normKey.includes('name') ||
+      normKey.includes('usn') ||
+      normKey.includes('year') ||
+      normKey.includes('department') ||
+      normKey.includes('branch') ||
+      normKey.includes('stream') ||
+      normKey.includes('semester') ||
+      normKey.includes('phone') ||
+      normKey.includes('mobile') ||
+      normKey.includes('resume') ||
+      normKey.includes('cv') ||
+      normKey.includes('timestamp') ||
+      normKey.includes('date')
+    )
+  }
 
-  const p2Raw = findValue(row, [
-    'priority 2',
-    'priority2',
-    'preference 2',
-    'preference2',
-    '2nd preference',
-    'second preference',
-    'preferred role 2',
-    'second choice',
-    'secondary role',
-    'which other role',
-    'backup role',
-  ])
+  // 1. Check for dedicated Priority 1 column
+  let p1Raw = ''
+  for (const [key, val] of Object.entries(row)) {
+    const normKey = normaliseText(key)
+    if (isExcludedHeader(normKey)) continue
+    if (
+      normKey.includes('priority1') ||
+      normKey.includes('preference1') ||
+      normKey.includes('1stpref') ||
+      normKey.includes('firstpref') ||
+      normKey.includes('firstchoice') ||
+      normKey.includes('primaryrole') ||
+      normKey.includes('preferredrole1') ||
+      normKey.includes('preferredteam1')
+    ) {
+      p1Raw = val
+      break
+    }
+  }
 
-  let p1Role = p1Raw ? canonicalizeRole(p1Raw) : ''
-  let p2Role = p2Raw ? canonicalizeRole(p2Raw) : ''
+  // 2. Check for dedicated Priority 2 column
+  let p2Raw = ''
+  for (const [key, val] of Object.entries(row)) {
+    const normKey = normaliseText(key)
+    if (isExcludedHeader(normKey)) continue
+    if (
+      normKey.includes('priority2') ||
+      normKey.includes('preference2') ||
+      normKey.includes('2ndpref') ||
+      normKey.includes('secondpref') ||
+      normKey.includes('secondchoice') ||
+      normKey.includes('secondaryrole') ||
+      normKey.includes('whichotherrole') ||
+      normKey.includes('backuprole') ||
+      normKey.includes('preferredrole2') ||
+      normKey.includes('preferredteam2')
+    ) {
+      p2Raw = val
+      break
+    }
+  }
 
-  if (!p1Role) {
-    const generalRole = findValue(row, [
-      'preferred role',
-      'role',
-      'domain',
-      'team',
-      'position',
-      'applying for',
-      'preference',
-    ])
-    if (generalRole) {
-      const parts = generalRole
-        .split(/[,;/|\n]+|(?:\band\b)/i)
-        .map((s) => s.trim())
-        .filter(Boolean)
-      if (parts.length > 0) {
-        p1Role = canonicalizeRole(parts[0])
-      }
-      if (parts.length > 1) {
-        const candidateP2 = canonicalizeRole(parts[1])
-        if (candidateP2 !== p1Role) {
-          p2Role = candidateP2
+  // 3. Check for general role/team multi-select column
+  let generalRaw = ''
+  for (const [key, val] of Object.entries(row)) {
+    const normKey = normaliseText(key)
+    if (isExcludedHeader(normKey)) continue
+    if (
+      normKey.includes('whichteam') ||
+      normKey.includes('whichrole') ||
+      normKey.includes('preferredteam') ||
+      normKey.includes('preferredrole') ||
+      normKey.includes('teamapplying') ||
+      normKey.includes('roleapplying') ||
+      normKey.includes('interestedrole') ||
+      normKey.includes('interestedteam') ||
+      normKey.includes('domain') ||
+      normKey.includes('position')
+    ) {
+      generalRaw = val
+      break
+    }
+  }
+
+  // 4. Fallback search: scan remaining non-excluded columns for explicit community role selections
+  if (!p1Raw && !generalRaw) {
+    for (const [key, val] of Object.entries(row)) {
+      const normKey = normaliseText(key)
+      if (isExcludedHeader(normKey)) continue
+      if (val && val.length < 120) {
+        const found = extractRolesFromText(val)
+        if (found.length > 0) {
+          generalRaw = val
+          break
         }
       }
     }
   }
 
-  if (!p1Role) {
-    p1Role = 'Technical Team'
+  const appliedRoles: string[] = []
+  const addRole = (role: string) => {
+    if (role && !appliedRoles.includes(role)) appliedRoles.push(role)
   }
 
-  if (!p2Role || p2Role === p1Role) {
-    const textCorpus = (
-      findValue(row, ['whichskillsdoyoupossess', 'skills', 'technicalareas', 'strongestskill', 'contribute']) +
-      ' ' +
-      findValue(row, ['department', 'branch'])
-    ).toLowerCase()
+  if (p1Raw) {
+    extractRolesFromText(p1Raw).forEach(addRole)
+  }
+  if (p2Raw) {
+    extractRolesFromText(p2Raw).forEach(addRole)
+  }
+  if (generalRaw) {
+    extractRolesFromText(generalRaw).forEach(addRole)
+  }
 
-    if (p1Role === 'Technical Team') {
-      if (
-        textCorpus.includes('design') ||
-        textCorpus.includes('ui') ||
-        textCorpus.includes('figma') ||
-        textCorpus.includes('canva') ||
-        textCorpus.includes('decor')
-      ) {
-        p2Role = 'Creative and Decoration'
-      } else if (
-        textCorpus.includes('event') ||
-        textCorpus.includes('speak') ||
-        textCorpus.includes('pr') ||
-        textCorpus.includes('anchor') ||
-        textCorpus.includes('lead')
-      ) {
-        p2Role = 'Event and PR Management'
-      } else if (
-        textCorpus.includes('media') ||
-        textCorpus.includes('social') ||
-        textCorpus.includes('content') ||
-        textCorpus.includes('video') ||
-        textCorpus.includes('market')
-      ) {
-        p2Role = 'Social Media, Marketing and Outreach'
-      } else {
-        p2Role = 'Operations and Logistics'
-      }
-    } else if (p1Role === 'Event and PR Management') {
-      if (
-        textCorpus.includes('social') ||
-        textCorpus.includes('market') ||
-        textCorpus.includes('outreach') ||
-        textCorpus.includes('content')
-      ) {
-        p2Role = 'Social Media, Marketing and Outreach'
-      } else if (
-        textCorpus.includes('operat') ||
-        textCorpus.includes('logistic') ||
-        textCorpus.includes('manage')
-      ) {
-        p2Role = 'Operations and Logistics'
-      } else {
-        p2Role = 'Creative and Decoration'
-      }
-    } else if (p1Role === 'Creative and Decoration') {
-      if (
-        textCorpus.includes('social') ||
-        textCorpus.includes('media') ||
-        textCorpus.includes('market')
-      ) {
-        p2Role = 'Social Media, Marketing and Outreach'
-      } else {
-        p2Role = 'Event and PR Management'
-      }
-    } else if (p1Role === 'Social Media, Marketing and Outreach') {
-      if (
-        textCorpus.includes('event') ||
-        textCorpus.includes('pr') ||
-        textCorpus.includes('public')
-      ) {
-        p2Role = 'Event and PR Management'
-      } else {
-        p2Role = 'Creative and Decoration'
-      }
-    } else if (p1Role === 'Operations and Logistics') {
-      if (
-        textCorpus.includes('event') ||
-        textCorpus.includes('pr') ||
-        textCorpus.includes('coord')
-      ) {
-        p2Role = 'Event and PR Management'
-      } else {
-        p2Role = 'Technical Team'
-      }
-    } else {
-      p2Role = 'Operations and Logistics'
-    }
+  // If candidate chose only 1 role, DO NOT fabricate a second role!
+  // If candidate chose 0 roles, fallback to Technical Team only.
+  if (appliedRoles.length === 0) {
+    appliedRoles.push('Technical Team')
   }
 
   return {
-    priority1: p1Role,
-    priority2: p2Role,
-    roles: [p1Role, p2Role],
+    priority1: appliedRoles[0] || 'Technical Team',
+    priority2: appliedRoles[1] || '',
+    roles: appliedRoles,
   }
 }
 
@@ -555,8 +710,11 @@ export function computeAndAssignDualPriorityRankings(applicants: ApplicantBrief[
   // 1. Assign shortlist priority allocation to each applicant based on which role they scored higher in
   applicants.forEach((app) => {
     app.shortlistPriority = determineShortlistPriority(app.priority1, app.priority2, app.roles[0])
-    if (app.priority1 && app.priority2) {
-      app.totalScore = Math.max(app.priority1.score, app.priority2.score)
+    const availableScores = [app.priority1?.score, app.priority2?.score].filter(
+      (score): score is number => typeof score === 'number'
+    )
+    if (availableScores.length) {
+      app.totalScore = Math.max(...availableScores)
       app.recommendation =
         app.totalScore >= 80 ? 'STRONG_INTERVIEW' : app.totalScore >= 65 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
     }
@@ -565,20 +723,32 @@ export function computeAndAssignDualPriorityRankings(applicants: ApplicantBrief[
   // 2. Rank candidates for each role, giving shortlisting priority to candidates who scored higher in this role
   COMMUNITY_ROLES.forEach((roleName) => {
     const roleCandidates = applicants.filter(
-      (a) => a.priority1?.role === roleName || a.priority2?.role === roleName
+      (a) =>
+        Boolean(a.priority1 && roleMatchesFilter(a.priority1.role, roleName)) ||
+        Boolean(a.priority2 && roleMatchesFilter(a.priority2.role, roleName))
     )
 
     // Sort order:
     // A) Candidates whose HIGHEST score is in this role (shortlist priority role) come first, sorted by score descending.
     // B) Candidates who selected this role as secondary choice with lower score come next, sorted by score descending.
     roleCandidates.sort((a, b) => {
-      const isPriorityA = a.shortlistPriority?.role === roleName ? 1 : 0
-      const isPriorityB = b.shortlistPriority?.role === roleName ? 1 : 0
+      const isPriorityA = Boolean(a.shortlistPriority && roleMatchesFilter(a.shortlistPriority.role, roleName)) ? 1 : 0
+      const isPriorityB = Boolean(b.shortlistPriority && roleMatchesFilter(b.shortlistPriority.role, roleName)) ? 1 : 0
       if (isPriorityA !== isPriorityB) {
         return isPriorityB - isPriorityA
       }
-      const scoreA = a.priority1?.role === roleName ? a.priority1.score : (a.priority2?.score ?? 0)
-      const scoreB = b.priority1?.role === roleName ? b.priority1.score : (b.priority2?.score ?? 0)
+      const scoreA =
+        a.priority1 && roleMatchesFilter(a.priority1.role, roleName)
+          ? a.priority1.score
+          : a.priority2 && roleMatchesFilter(a.priority2.role, roleName)
+          ? a.priority2.score
+          : 0
+      const scoreB =
+        b.priority1 && roleMatchesFilter(b.priority1.role, roleName)
+          ? b.priority1.score
+          : b.priority2 && roleMatchesFilter(b.priority2.role, roleName)
+          ? b.priority2.score
+          : 0
       return scoreB - scoreA
     })
 
@@ -586,15 +756,15 @@ export function computeAndAssignDualPriorityRankings(applicants: ApplicantBrief[
 
     roleCandidates.forEach((a, idx) => {
       const rank = idx + 1
-      if (a.priority1 && a.priority1.role === roleName) {
+      if (a.priority1 && roleMatchesFilter(a.priority1.role, roleName)) {
         a.priority1.rank = rank
         a.priority1.totalInRole = totalInRole
       }
-      if (a.priority2 && a.priority2.role === roleName) {
+      if (a.priority2 && roleMatchesFilter(a.priority2.role, roleName)) {
         a.priority2.rank = rank
         a.priority2.totalInRole = totalInRole
       }
-      if (a.shortlistPriority && a.shortlistPriority.role === roleName) {
+      if (a.shortlistPriority && roleMatchesFilter(a.shortlistPriority.role, roleName)) {
         a.shortlistPriority.rank = rank
       }
     })
@@ -674,7 +844,7 @@ export function computeLiveOverview(applicants: ApplicantBrief[]): Overview {
   const roleStatsMap: Record<string, RoleStat> = {}
 
   COMMUNITY_ROLES.forEach((cr) => {
-    const roleId = cr.toLowerCase().replace(/[^a-z0-9]/g, '_')
+    const roleId = roleIdFor(cr)
     roleStatsMap[roleId] = {
       roleId,
       name: cr,
@@ -690,7 +860,7 @@ export function computeLiveOverview(applicants: ApplicantBrief[]): Overview {
   applicants.forEach((app) => {
     const canonRoles = (app.roles.length ? app.roles : ['Technical Team']).map(canonicalizeRole)
     canonRoles.forEach((roleName) => {
-      const roleId = roleName.toLowerCase().replace(/[^a-z0-9]/g, '_')
+      const roleId = roleIdFor(roleName)
       if (!roleStatsMap[roleId]) {
         roleStatsMap[roleId] = {
           roleId,
@@ -716,8 +886,7 @@ export function computeLiveOverview(applicants: ApplicantBrief[]): Overview {
     const roleScores = applicants
       .filter((a) =>
         (a.roles.length ? a.roles : ['Technical Team'])
-          .map(canonicalizeRole)
-          .some((r) => r.toLowerCase().replace(/[^a-z0-9]/g, '_') === st.roleId)
+          .some((r) => roleIdFor(r) === st.roleId)
       )
       .map((a) => a.totalScore)
     st.averageScore = roleScores.length
@@ -1145,37 +1314,48 @@ export function reEvaluateStoredApplicants(): void {
         detail.applicant.roles = roles
         detail.brief.roles = roles
 
-        const evalRes1 = evaluateStudentApplication(row, priority1, resumeLink)
-        const evalRes2 = evaluateStudentApplication(row, priority2, resumeLink)
+        const evalRes1 = priority1 ? evaluateStudentApplication(row, priority1, resumeLink) : null
+        const evalRes2 = priority2 ? evaluateStudentApplication(row, priority2, resumeLink) : null
 
-        const score1 = evalRes1.score
-        const score2 = evalRes2.score
-        const maxScore = Math.max(score1, score2)
+        const score1 = evalRes1?.score ?? 0
+        const score2 = evalRes2?.score ?? 0
+        const maxScore = priority2 && evalRes2 ? Math.max(score1, score2) : score1
         const rec = maxScore >= 80 ? 'STRONG_INTERVIEW' : maxScore >= 65 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
 
         brief.totalScore = maxScore
         brief.recommendation = rec
-        brief.roleScores = { [priority1]: score1, [priority2]: score2 }
+        brief.roleScores = {
+          ...(priority1 && evalRes1 ? { [priority1]: score1 } : {}),
+          ...(priority2 && evalRes2 ? { [priority2]: score2 } : {}),
+        }
 
-        brief.priority1 = {
-          role: priority1,
-          priority: 'Priority 1',
-          score: score1,
-          rank: 1,
-          totalInRole: 1,
-          fit: score1 >= 80 ? 'high' : score1 >= 65 ? 'medium' : 'low',
-          recommendation: evalRes1.recommendation,
-        }
-        brief.priority2 = {
-          role: priority2,
-          priority: 'Priority 2',
-          score: score2,
-          rank: 1,
-          totalInRole: 1,
-          fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
-          recommendation: evalRes2.recommendation,
-        }
-        brief.shortlistPriority = determineShortlistPriority(brief.priority1, brief.priority2, priority1)
+        brief.priority1 = priority1 && evalRes1
+          ? {
+              role: priority1,
+              priority: 'Priority 1',
+              score: score1,
+              rank: 1,
+              totalInRole: 1,
+              fit: score1 >= 80 ? 'high' : score1 >= 65 ? 'medium' : 'low',
+              recommendation: evalRes1.recommendation,
+            }
+          : undefined
+        brief.priority2 = priority2 && evalRes2
+          ? {
+              role: priority2,
+              priority: 'Priority 2',
+              score: score2,
+              rank: 1,
+              totalInRole: 1,
+              fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
+              recommendation: evalRes2.recommendation,
+            }
+          : undefined
+        brief.shortlistPriority = determineShortlistPriority(
+          brief.priority1,
+          brief.priority2,
+          priority1 || roles[0] || 'Technical Team'
+        )
 
         detail.applicant.total_score = maxScore
         detail.applicant.recommendation = rec
@@ -1184,34 +1364,71 @@ export function reEvaluateStoredApplicants(): void {
         detail.applicant.shortlist_priority = brief.shortlistPriority
         detail.applicant.role_scores = brief.roleScores
 
-        if (detail.evaluation) {
+        const activeEval = brief.shortlistPriority?.role === priority2 && evalRes2 ? evalRes2 : (evalRes1 || evalRes2)
+
+        if (detail.evaluation && activeEval) {
           detail.evaluation.total_score = maxScore
           detail.evaluation.ai_suggested_total = maxScore
           detail.evaluation.recommendation = rec
-          detail.evaluation.criteria = evalRes1.criteria
-          detail.evaluation.summary = evalRes1.summary
-          detail.evaluation.strengths = evalRes1.strengths
-          detail.evaluation.technical_skills = evalRes1.technicalSkills
-          detail.evaluation.nontechnical_skills = evalRes1.nonTechnicalSkills
+          detail.evaluation.criteria = activeEval.criteria
+          detail.evaluation.summary = activeEval.summary
+          detail.evaluation.strengths = activeEval.strengths
+          detail.evaluation.technical_skills = activeEval.technicalSkills
+          detail.evaluation.nontechnical_skills = activeEval.nonTechnicalSkills
+          detail.evaluation.interview_questions = [
+            ...(priority1
+              ? [
+                  {
+                    role: priority1,
+                    question: `Tell us about your experience related to ${priority1} and what inspired you to apply to AWS Student Builder Group at SJBIT.`,
+                    why: 'Assesses candidate motivation and core domain experience.',
+                  },
+                ]
+              : []),
+            ...(priority2
+              ? [
+                  {
+                    role: priority2,
+                    question: `Describe your familiarity with ${priority2} and how you can support this team if selected for your secondary preference.`,
+                    why: 'Evaluates adaptability and secondary domain execution.',
+                  },
+                ]
+              : [
+                  {
+                    role: priority1 || roles[0] || 'Technical Team',
+                    question:
+                      'Describe a challenging project you worked on recently and how you handled unexpected roadblocks.',
+                    why: 'Evaluates resilience, domain execution, and problem solving.',
+                  },
+                ]),
+          ]
           detail.evaluation.role_evaluations = [
-            {
-              role_id: priority1,
-              priority: 'PRIMARY',
-              score: score1,
-              rank: 1,
-              total_candidates: 1,
-              fit: score1 >= 80 ? 'high' : score1 >= 65 ? 'medium' : 'low',
-              rationale: `Priority 1 (Primary Preference): ${evalRes1.summary}`,
-            },
-            {
-              role_id: priority2,
-              priority: 'SECONDARY',
-              score: score2,
-              rank: 1,
-              total_candidates: 1,
-              fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
-              rationale: `Priority 2 (Secondary Preference): ${evalRes2.summary}`,
-            },
+            ...(priority1 && evalRes1
+              ? [
+                  {
+                    role_id: priority1,
+                    priority: 'PRIMARY' as const,
+                    score: score1,
+                    rank: 1,
+                    total_candidates: 1,
+                    fit: score1 >= 80 ? 'high' : score1 >= 65 ? 'medium' : 'low',
+                    rationale: `Priority 1 (Primary Preference): ${evalRes1.summary}`,
+                  },
+                ]
+              : []),
+            ...(priority2 && evalRes2
+              ? [
+                  {
+                    role_id: priority2,
+                    priority: 'SECONDARY' as const,
+                    score: score2,
+                    rank: 1,
+                    total_candidates: 1,
+                    fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
+                    rationale: `Priority 2 (Secondary Preference): ${evalRes2.summary}`,
+                  },
+                ]
+              : []),
           ]
         }
 
@@ -1277,12 +1494,12 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
 
       const { priority1, priority2, roles } = extractApplicantPriorities(row)
 
-      // Comprehensive evaluation for both priority roles
-      const evalResult1 = evaluateStudentApplication(row, priority1, resumeLink)
-      const evalResult2 = evaluateStudentApplication(row, priority2, resumeLink)
-      const score = evalResult1.score
-      const score2 = evalResult2.score
-      const maxScore = Math.max(score, score2)
+      // Evaluate ONLY the roles explicitly applied for in the form.
+      const evalResult1 = priority1 ? evaluateStudentApplication(row, priority1, resumeLink) : null
+      const evalResult2 = priority2 ? evaluateStudentApplication(row, priority2, resumeLink) : null
+      const score = evalResult1?.score ?? 0
+      const score2 = evalResult2?.score ?? 0
+      const maxScore = priority2 && evalResult2 ? Math.max(score, score2) : score
       const recommendation =
         maxScore >= 80 ? 'STRONG_INTERVIEW' : maxScore >= 65 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
 
@@ -1292,27 +1509,37 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
         ? existingMatch.applicantId
         : `AWS-2026-${String(existing.length + newApplicants.length + 1).padStart(3, '0')}`
 
-      const priority1Obj: RolePriorityScore = {
-        role: priority1,
-        priority: 'Priority 1',
-        score,
-        rank: 1,
-        totalInRole: 1,
-        fit: score >= 80 ? 'high' : score >= 65 ? 'medium' : 'low',
-        recommendation: evalResult1.recommendation,
-      }
+      const priority1Obj: RolePriorityScore | undefined = priority1 && evalResult1
+        ? {
+            role: priority1,
+            priority: 'Priority 1',
+            score,
+            rank: 1,
+            totalInRole: 1,
+            fit: score >= 80 ? 'high' : score >= 65 ? 'medium' : 'low',
+            recommendation: evalResult1.recommendation,
+          }
+        : undefined
 
-      const priority2Obj: RolePriorityScore = {
-        role: priority2,
-        priority: 'Priority 2',
-        score: score2,
-        rank: 1,
-        totalInRole: 1,
-        fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
-        recommendation: evalResult2.recommendation,
-      }
+      const priority2Obj: RolePriorityScore | undefined = priority2 && evalResult2
+        ? {
+            role: priority2,
+            priority: 'Priority 2',
+            score: score2,
+            rank: 1,
+            totalInRole: 1,
+            fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
+            recommendation: evalResult2.recommendation,
+          }
+        : undefined
 
-      const shortlistPriority = determineShortlistPriority(priority1Obj, priority2Obj, priority1)
+      const shortlistPriority = determineShortlistPriority(
+        priority1Obj,
+        priority2Obj,
+        priority1 || roles[0] || 'Technical Team'
+      )
+
+      const activeEvalResult = shortlistPriority.role === priority2 && evalResult2 ? evalResult2 : (evalResult1 || evalResult2)
 
       const brief: ApplicantBrief = {
         applicantId,
@@ -1334,7 +1561,10 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
         priority1: priority1Obj,
         priority2: priority2Obj,
         shortlistPriority,
-        roleScores: { [priority1]: score, [priority2]: score2 },
+        roleScores: {
+          ...(priority1 && evalResult1 ? { [priority1]: score } : {}),
+          ...(priority2 && evalResult2 ? { [priority2]: score2 } : {}),
+        },
       }
 
       // Create detail record
@@ -1368,7 +1598,10 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
           recommendation,
           eligibility_status: 'PASS',
           eligibility_failures: [],
-          role_scores: { [priority1]: score, [priority2]: score2 },
+          role_scores: {
+            ...(priority1 && evalResult1 ? { [priority1]: score } : {}),
+            ...(priority2 && evalResult2 ? { [priority2]: score2 } : {}),
+          },
           priority1: priority1Obj,
           priority2: priority2Obj,
           shortlist_priority: shortlistPriority,
@@ -1397,78 +1630,103 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
               },
             ]
           : [],
-        evaluation: {
-          applicant_id: applicantId,
-          evaluation_id: `eval-${applicantId}`,
-          rubric_version: '2026.2',
-          created_at: new Date().toISOString(),
-          criteria: evalResult1.criteria,
-          total_score: score,
-          max_score: 100,
-          score_complete: true,
-          ai_suggested_total: score,
-          recommendation,
-          eligibility: [
-            { rule_id: 'enrolled', label: 'SJBIT Student', status: 'PASS', mandatory: true, detail: 'Enrolled', observed: usn },
-            { rule_id: 'year', label: 'Eligible Year', status: 'PASS', mandatory: true, detail: '2nd/3rd/4th', observed: yearOfStudy },
-          ],
-          eligibility_status: 'PASS',
-          eligibility_failures: [],
-          summary: evalResult1.summary,
-          strengths: evalResult1.strengths,
-          weaknesses: [],
-          missing_information: [],
-          inconsistencies: [],
-          uncertain_findings: [],
-          technical_skills: evalResult1.technicalSkills,
-          nontechnical_skills: evalResult1.nonTechnicalSkills,
-          projects: [],
-          certifications: [],
-          experience: [],
-          leadership_evidence: [],
-          communication_evidence: [],
-          interview_questions: [
-            {
-              role: priority1,
-              question: `Tell us about your experience related to ${priority1} and what inspired you to apply to AWS Student Builder Group at SJBIT.`,
-              why: 'Assesses candidate motivation and core domain experience.',
-            },
-            {
-              role: priority2,
-              question:
-                `Describe your familiarity with ${priority2} and how you can support this team if selected as secondary preference.`,
-              why: 'Evaluates adaptability and secondary domain execution.',
-            },
-          ],
-          role_evaluations: [
-            {
-              role_id: priority1,
-              priority: 'PRIMARY',
-              score,
-              rank: 1,
-              total_candidates: 1,
-              fit: score >= 80 ? 'high' : score >= 65 ? 'medium' : 'low',
-              rationale: `Priority 1 (Primary Preference): ${evalResult1.summary}`,
-            },
-            {
-              role_id: priority2,
-              priority: 'SECONDARY',
-              score: score2,
-              rank: 1,
-              total_candidates: 1,
-              fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
-              rationale: `Priority 2 (Secondary Preference): ${evalResult2.summary}`,
-            },
-          ],
-          confidence: 'high',
-          model_metadata: { provider: 'gemini', model: 'gemini-1.5-flash', structured_output: true },
-          validation_errors: [],
-          document_coverage: {},
-          review_status: existingMatch ? existingMatch.reviewStatus : 'PENDING',
-          human_notes: '',
-          human_override: {},
-          version: 2,
-        },
+        evaluation: activeEvalResult
+          ? {
+              applicant_id: applicantId,
+              evaluation_id: `eval-${applicantId}`,
+              rubric_version: '2026.2',
+              created_at: new Date().toISOString(),
+              criteria: activeEvalResult.criteria,
+              total_score: maxScore,
+              max_score: 100,
+              score_complete: true,
+              ai_suggested_total: maxScore,
+              recommendation,
+              eligibility: [
+                { rule_id: 'enrolled', label: 'SJBIT Student', status: 'PASS', mandatory: true, detail: 'Enrolled', observed: usn },
+                { rule_id: 'year', label: 'Eligible Year', status: 'PASS', mandatory: true, detail: '2nd/3rd/4th', observed: yearOfStudy },
+              ],
+              eligibility_status: 'PASS',
+              eligibility_failures: [],
+              summary: activeEvalResult.summary,
+              strengths: activeEvalResult.strengths,
+              weaknesses: [],
+              missing_information: [],
+              inconsistencies: [],
+              uncertain_findings: [],
+              technical_skills: activeEvalResult.technicalSkills,
+              nontechnical_skills: activeEvalResult.nonTechnicalSkills,
+              projects: [],
+              certifications: [],
+              experience: [],
+              leadership_evidence: [],
+              communication_evidence: [],
+              interview_questions: [
+                ...(priority1
+                  ? [
+                      {
+                        role: priority1,
+                        question: `Tell us about your experience related to ${priority1} and what inspired you to apply to AWS Student Builder Group at SJBIT.`,
+                        why: 'Assesses candidate motivation and core domain experience.',
+                      },
+                    ]
+                  : []),
+                ...(priority2
+                  ? [
+                      {
+                        role: priority2,
+                        question:
+                          `Describe your familiarity with ${priority2} and how you can support this team if selected for your secondary preference.`,
+                        why: 'Evaluates adaptability and secondary domain execution.',
+                      },
+                    ]
+                  : [
+                      {
+                        role: priority1 || roles[0] || 'Technical Team',
+                        question:
+                          'Describe a challenging project you worked on recently and how you handled unexpected roadblocks.',
+                        why: 'Evaluates resilience, domain execution, and problem solving.',
+                      },
+                    ]),
+              ],
+              role_evaluations: [
+                ...(priority1 && evalResult1
+                  ? [
+                      {
+                        role_id: priority1,
+                        priority: 'PRIMARY' as const,
+                        score,
+                        rank: 1,
+                        total_candidates: 1,
+                        fit: score >= 80 ? 'high' : score >= 65 ? 'medium' : 'low',
+                        rationale: `Priority 1 (Primary Preference): ${evalResult1.summary}`,
+                      },
+                    ]
+                  : []),
+                ...(priority2 && evalResult2
+                  ? [
+                      {
+                        role_id: priority2,
+                        priority: 'SECONDARY' as const,
+                        score: score2,
+                        rank: 1,
+                        total_candidates: 1,
+                        fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
+                        rationale: `Priority 2 (Secondary Preference): ${evalResult2.summary}`,
+                      },
+                    ]
+                  : []),
+              ],
+              confidence: 'high',
+              model_metadata: { provider: 'gemini', model: 'gemini-1.5-flash', structured_output: true },
+              validation_errors: [],
+              document_coverage: {},
+              review_status: existingMatch ? existingMatch.reviewStatus : 'PENDING',
+              human_notes: '',
+              human_override: {},
+              version: 2,
+          }
+          : null,
         evaluationHistory: [],
         audit: [],
       }

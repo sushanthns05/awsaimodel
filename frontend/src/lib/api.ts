@@ -327,12 +327,13 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
     return { updated: Array.from(ids), skipped: [], decision: dec } as unknown as T
   }
 
-  // Handle shortlist query with role, minScore, maxScore
+  // Handle shortlist query with role, priority, minScore, maxScore
   if (path.startsWith('/shortlist?') || path === '/shortlist') {
     const queryPart = path.includes('?') ? path.split('?')[1] : ''
     const params = new URLSearchParams(queryPart)
 
     const role = params.get('role')?.toLowerCase().trim() || ''
+    const priority = params.get('priority')?.trim() || '' // 'P1', 'P2', or ''
     const minScore = params.has('minScore') && params.get('minScore') !== '' ? Number(params.get('minScore')) : null
     const maxScore = params.has('maxScore') && params.get('maxScore') !== '' ? Number(params.get('maxScore')) : null
     const limit = Number(params.get('limit')) || 300
@@ -340,27 +341,53 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
     let list = getStoredLiveApplicants()
 
     if (role && role !== 'all') {
-      list = list.filter((a) =>
-        a.roles.some((r) => {
-          const c = canonicalizeRole(r).toLowerCase()
-          const rId = c.replace(/[^a-z0-9]/g, '_')
-          return c === role || rId === role || c.includes(role) || r.toLowerCase().includes(role)
-        })
-      )
+      list = list.filter((a) => {
+        const matchesP1 = a.priority1 && (
+          canonicalizeRole(a.priority1.role).toLowerCase() === role ||
+          a.priority1.role.toLowerCase().replace(/[^a-z0-9]/g, '_') === role
+        )
+        const matchesP2 = a.priority2 && (
+          canonicalizeRole(a.priority2.role).toLowerCase() === role ||
+          a.priority2.role.toLowerCase().replace(/[^a-z0-9]/g, '_') === role
+        )
+
+        if (priority === 'P1') return matchesP1
+        if (priority === 'P2') return matchesP2
+        return matchesP1 || matchesP2
+      })
     }
 
-    if (minScore !== null && !isNaN(minScore)) {
-      list = list.filter((a) => a.totalScore >= minScore)
-    }
+    let items = list.map((app) => {
+      let activeScore = app.totalScore
+      let activeRank = 1
+      let activePriority: 'Priority 1' | 'Priority 2' = 'Priority 1'
 
-    if (maxScore !== null && !isNaN(maxScore)) {
-      list = list.filter((a) => a.totalScore <= maxScore)
-    }
+      if (role && role !== 'all') {
+        const isP1 = app.priority1 && (
+          canonicalizeRole(app.priority1.role).toLowerCase() === role ||
+          app.priority1.role.toLowerCase().replace(/[^a-z0-9]/g, '_') === role
+        )
+        const isP2 = app.priority2 && (
+          canonicalizeRole(app.priority2.role).toLowerCase() === role ||
+          app.priority2.role.toLowerCase().replace(/[^a-z0-9]/g, '_') === role
+        )
 
-    list.sort((a, b) => b.totalScore - a.totalScore)
+        if (priority === 'P2' && isP2) {
+          activeScore = app.priority2?.score ?? app.totalScore
+          activeRank = app.priority2?.rank ?? 1
+          activePriority = 'Priority 2'
+        } else if (isP1) {
+          activeScore = app.priority1?.score ?? app.totalScore
+          activeRank = app.priority1?.rank ?? 1
+          activePriority = 'Priority 1'
+        } else if (isP2) {
+          activeScore = app.priority2?.score ?? app.totalScore
+          activeRank = app.priority2?.rank ?? 1
+          activePriority = 'Priority 2'
+        }
+      }
 
-    return {
-      items: list.slice(0, limit).map((app, index) => ({
+      return {
         applicantId: app.applicantId,
         fullName: app.fullName,
         email: app.email,
@@ -368,7 +395,7 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
         department: app.department,
         yearOfStudy: app.yearOfStudy,
         roles: app.roles.map(canonicalizeRole),
-        roleScore: app.totalScore,
+        roleScore: activeScore,
         totalScore: app.totalScore,
         recommendation: app.recommendation,
         eligibilityStatus: app.eligibilityStatus,
@@ -376,14 +403,40 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
         reviewStatus: app.reviewStatus,
         reviewDecision: app.reviewStatus === 'APPROVED' ? 'SHORTLISTED' : app.reviewStatus === 'REJECTED' ? 'REJECTED' : 'PENDING',
         reviewedBy: '',
-        strongestEvidence: ['Responses verified against official rubric requirements.'],
+        strongestEvidence: [
+          app.priority1 ? `P1: ${app.priority1.role} (Rank #${app.priority1.rank}, Score ${app.priority1.score})` : '',
+          app.priority2 ? `P2: ${app.priority2.role} (Rank #${app.priority2.rank}, Score ${app.priority2.score})` : '',
+        ].filter(Boolean),
         concerns: [],
         urgentReview: app.urgentReview,
         documents: app.documents,
-        rank: index + 1,
-      })),
-      total: list.length,
+        rank: activeRank,
+        priority1: app.priority1,
+        priority2: app.priority2,
+        activeRolePriority: activePriority,
+      }
+    })
+
+    if (minScore !== null && !isNaN(minScore)) {
+      items = items.filter((a) => a.roleScore >= minScore)
+    }
+
+    if (maxScore !== null && !isNaN(maxScore)) {
+      items = items.filter((a) => a.roleScore <= maxScore)
+    }
+
+    // Sort by roleScore descending
+    items.sort((a, b) => b.roleScore - a.roleScore)
+    items.forEach((item, idx) => {
+      item.rank = idx + 1
+    })
+
+    return {
+      items: items.slice(0, limit),
+      total: items.length,
       role: role || 'all',
+      minScore,
+      maxScore,
     } as unknown as T
   }
   if (path.startsWith('/reports/generate')) {

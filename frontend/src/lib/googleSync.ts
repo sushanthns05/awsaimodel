@@ -1,4 +1,4 @@
-import type { ApplicantBrief, ApplicantDetail, Overview, RoleStat } from '../types'
+import type { ApplicantBrief, ApplicantDetail, Overview, RoleStat, RolePriorityScore } from '../types'
 
 export interface SyncResult {
   totalRows: number
@@ -9,7 +9,7 @@ export interface SyncResult {
 
 const STORAGE_KEY = 'sbg_live_applicants'
 const DETAILS_KEY = 'sbg_live_applicant_details'
-const EVAL_VERSION = '2026.3_community_roles'
+const EVAL_VERSION = '2026.4_dual_priority_rankings'
 
 export const COMMUNITY_ROLES = [
   'Technical Team',
@@ -328,6 +328,253 @@ function findValue(row: Record<string, string>, aliases: string[]): string {
     }
   }
   return ''
+}
+
+/**
+ * Extracts Priority 1 and Priority 2 choices from Google Form responses.
+ * Detects explicit Priority 1/2 or Preference 1/2 fields, split multiple choices,
+ * and ensures every candidate has both priorities assessed fairly.
+ */
+export function extractApplicantPriorities(row: Record<string, string>): {
+  priority1: string
+  priority2: string
+  roles: string[]
+} {
+  const p1Raw = findValue(row, [
+    'priority 1',
+    'priority1',
+    'preference 1',
+    'preference1',
+    '1st preference',
+    'first preference',
+    'preferred role 1',
+    'first choice',
+    'primary role',
+  ])
+
+  const p2Raw = findValue(row, [
+    'priority 2',
+    'priority2',
+    'preference 2',
+    'preference2',
+    '2nd preference',
+    'second preference',
+    'preferred role 2',
+    'second choice',
+    'secondary role',
+    'which other role',
+    'backup role',
+  ])
+
+  let p1Role = p1Raw ? canonicalizeRole(p1Raw) : ''
+  let p2Role = p2Raw ? canonicalizeRole(p2Raw) : ''
+
+  if (!p1Role) {
+    const generalRole = findValue(row, [
+      'preferred role',
+      'role',
+      'domain',
+      'team',
+      'position',
+      'applying for',
+      'preference',
+    ])
+    if (generalRole) {
+      const parts = generalRole
+        .split(/[,;/|\n]+|(?:\band\b)/i)
+        .map((s) => s.trim())
+        .filter(Boolean)
+      if (parts.length > 0) {
+        p1Role = canonicalizeRole(parts[0])
+      }
+      if (parts.length > 1) {
+        const candidateP2 = canonicalizeRole(parts[1])
+        if (candidateP2 !== p1Role) {
+          p2Role = candidateP2
+        }
+      }
+    }
+  }
+
+  if (!p1Role) {
+    p1Role = 'Technical Team'
+  }
+
+  if (!p2Role || p2Role === p1Role) {
+    const textCorpus = (
+      findValue(row, ['whichskillsdoyoupossess', 'skills', 'technicalareas', 'strongestskill', 'contribute']) +
+      ' ' +
+      findValue(row, ['department', 'branch'])
+    ).toLowerCase()
+
+    if (p1Role === 'Technical Team') {
+      if (
+        textCorpus.includes('design') ||
+        textCorpus.includes('ui') ||
+        textCorpus.includes('figma') ||
+        textCorpus.includes('canva') ||
+        textCorpus.includes('decor')
+      ) {
+        p2Role = 'Creative and Decoration'
+      } else if (
+        textCorpus.includes('event') ||
+        textCorpus.includes('speak') ||
+        textCorpus.includes('pr') ||
+        textCorpus.includes('anchor') ||
+        textCorpus.includes('lead')
+      ) {
+        p2Role = 'Event and PR Management'
+      } else if (
+        textCorpus.includes('media') ||
+        textCorpus.includes('social') ||
+        textCorpus.includes('content') ||
+        textCorpus.includes('video') ||
+        textCorpus.includes('market')
+      ) {
+        p2Role = 'Social Media, Marketing and Outreach'
+      } else {
+        p2Role = 'Operations and Logistics'
+      }
+    } else if (p1Role === 'Event and PR Management') {
+      if (
+        textCorpus.includes('social') ||
+        textCorpus.includes('market') ||
+        textCorpus.includes('outreach') ||
+        textCorpus.includes('content')
+      ) {
+        p2Role = 'Social Media, Marketing and Outreach'
+      } else if (
+        textCorpus.includes('operat') ||
+        textCorpus.includes('logistic') ||
+        textCorpus.includes('manage')
+      ) {
+        p2Role = 'Operations and Logistics'
+      } else {
+        p2Role = 'Creative and Decoration'
+      }
+    } else if (p1Role === 'Creative and Decoration') {
+      if (
+        textCorpus.includes('social') ||
+        textCorpus.includes('media') ||
+        textCorpus.includes('market')
+      ) {
+        p2Role = 'Social Media, Marketing and Outreach'
+      } else {
+        p2Role = 'Event and PR Management'
+      }
+    } else if (p1Role === 'Social Media, Marketing and Outreach') {
+      if (
+        textCorpus.includes('event') ||
+        textCorpus.includes('pr') ||
+        textCorpus.includes('public')
+      ) {
+        p2Role = 'Event and PR Management'
+      } else {
+        p2Role = 'Creative and Decoration'
+      }
+    } else if (p1Role === 'Operations and Logistics') {
+      if (
+        textCorpus.includes('event') ||
+        textCorpus.includes('pr') ||
+        textCorpus.includes('coord')
+      ) {
+        p2Role = 'Event and PR Management'
+      } else {
+        p2Role = 'Technical Team'
+      }
+    } else {
+      p2Role = 'Operations and Logistics'
+    }
+  }
+
+  return {
+    priority1: p1Role,
+    priority2: p2Role,
+    roles: [p1Role, p2Role],
+  }
+}
+
+/**
+ * Computes deterministic role rankings across all applicants for both Priority 1 and Priority 2 choices.
+ * Updates both the brief and detailed applicant records with individual rank and role score.
+ */
+export function computeAndAssignDualPriorityRankings(applicants: ApplicantBrief[]): ApplicantBrief[] {
+  COMMUNITY_ROLES.forEach((roleName) => {
+    // 1. Gather all candidates who applied for this role (either as P1 or P2)
+    const roleCandidates = applicants.filter(
+      (a) => a.priority1?.role === roleName || a.priority2?.role === roleName
+    )
+
+    // Sort descending by their score for this specific role
+    roleCandidates.sort((a, b) => {
+      const scoreA = a.priority1?.role === roleName ? a.priority1.score : (a.priority2?.score ?? 0)
+      const scoreB = b.priority1?.role === roleName ? b.priority1.score : (b.priority2?.score ?? 0)
+      return scoreB - scoreA
+    })
+
+    const totalInRole = roleCandidates.length
+
+    // Assign overall ranking within this role
+    roleCandidates.forEach((a, idx) => {
+      const rank = idx + 1
+      if (a.priority1 && a.priority1.role === roleName) {
+        a.priority1.rank = rank
+        a.priority1.totalInRole = totalInRole
+      }
+      if (a.priority2 && a.priority2.role === roleName) {
+        a.priority2.rank = rank
+        a.priority2.totalInRole = totalInRole
+      }
+    })
+  })
+
+  // Synchronize detailed records in storage
+  applicants.forEach((app) => {
+    const detail = getStoredLiveDetail(app.applicantId)
+    if (detail) {
+      detail.brief = app
+      detail.applicant.roles = app.roles
+      detail.applicant.priority1 = app.priority1
+      detail.applicant.priority2 = app.priority2
+      detail.applicant.role_scores = {
+        ...(app.priority1 ? { [app.priority1.role]: app.priority1.score } : {}),
+        ...(app.priority2 ? { [app.priority2.role]: app.priority2.score } : {}),
+      }
+      if (detail.evaluation) {
+        detail.evaluation.role_evaluations = [
+          ...(app.priority1
+            ? [
+                {
+                  role_id: app.priority1.role,
+                  priority: 'PRIMARY',
+                  score: app.priority1.score,
+                  rank: app.priority1.rank,
+                  total_candidates: app.priority1.totalInRole,
+                  fit: app.priority1.fit || (app.priority1.score >= 80 ? 'high' : app.priority1.score >= 65 ? 'medium' : 'low'),
+                  rationale: `Priority 1 (Primary Preference): Evaluated score ${app.priority1.score}/100. Rank #${app.priority1.rank} of ${app.priority1.totalInRole} candidates in ${app.priority1.role}.`,
+                },
+              ]
+            : []),
+          ...(app.priority2
+            ? [
+                {
+                  role_id: app.priority2.role,
+                  priority: 'SECONDARY',
+                  score: app.priority2.score,
+                  rank: app.priority2.rank,
+                  total_candidates: app.priority2.totalInRole,
+                  fit: app.priority2.fit || (app.priority2.score >= 80 ? 'high' : app.priority2.score >= 65 ? 'medium' : 'low'),
+                  rationale: `Priority 2 (Secondary Preference): Evaluated score ${app.priority2.score}/100. Rank #${app.priority2.rank} of ${app.priority2.totalInRole} candidates in ${app.priority2.role}.`,
+                },
+              ]
+            : []),
+        ]
+      }
+      saveStoredLiveDetail(detail)
+    }
+  })
+
+  return applicants
 }
 
 export function computeLiveOverview(applicants: ApplicantBrief[]): Overview {
@@ -808,33 +1055,78 @@ export function reEvaluateStoredApplicants(): void {
     applicants.forEach((brief) => {
       const detail = getStoredLiveDetail(brief.applicantId)
       if (detail && detail.applicant && detail.applicant.responses) {
-        const canonRoles = (brief.roles.length ? brief.roles : ['Technical Team']).map(canonicalizeRole)
-        brief.roles = canonRoles
-        detail.applicant.roles = canonRoles
-        detail.brief.roles = canonRoles
+        const row = detail.applicant.responses as Record<string, string>
+        const resumeLink = findValue(row, ['resume', 'cv', 'curriculum vitae', 'drive', 'portfolio', 'upload', 'link'])
+        const { priority1, priority2, roles } = extractApplicantPriorities(row)
 
-        const evalRes = evaluateStudentApplication(
-          detail.applicant.responses as Record<string, string>,
-          canonRoles[0],
-          detail.documents?.[0]?.downloadUrl || ''
-        )
+        brief.roles = roles
+        detail.applicant.roles = roles
+        detail.brief.roles = roles
 
-        brief.totalScore = evalRes.score
-        brief.recommendation = evalRes.recommendation
+        const evalRes1 = evaluateStudentApplication(row, priority1, resumeLink)
+        const evalRes2 = evaluateStudentApplication(row, priority2, resumeLink)
 
-        detail.applicant.total_score = evalRes.score
-        detail.applicant.recommendation = evalRes.recommendation
-        detail.applicant.role_scores = { [canonRoles[0]]: evalRes.score }
+        const score1 = evalRes1.score
+        const score2 = evalRes2.score
+
+        brief.totalScore = score1
+        brief.recommendation = evalRes1.recommendation
+        brief.roleScores = { [priority1]: score1, [priority2]: score2 }
+
+        brief.priority1 = {
+          role: priority1,
+          priority: 'Priority 1',
+          score: score1,
+          rank: 1,
+          totalInRole: 1,
+          fit: score1 >= 80 ? 'high' : score1 >= 65 ? 'medium' : 'low',
+          recommendation: evalRes1.recommendation,
+        }
+        brief.priority2 = {
+          role: priority2,
+          priority: 'Priority 2',
+          score: score2,
+          rank: 1,
+          totalInRole: 1,
+          fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
+          recommendation: evalRes2.recommendation,
+        }
+
+        detail.applicant.total_score = score1
+        detail.applicant.recommendation = evalRes1.recommendation
+        detail.applicant.priority1 = brief.priority1
+        detail.applicant.priority2 = brief.priority2
+        detail.applicant.role_scores = brief.roleScores
 
         if (detail.evaluation) {
-          detail.evaluation.total_score = evalRes.score
-          detail.evaluation.ai_suggested_total = evalRes.score
-          detail.evaluation.recommendation = evalRes.recommendation
-          detail.evaluation.criteria = evalRes.criteria
-          detail.evaluation.summary = evalRes.summary
-          detail.evaluation.strengths = evalRes.strengths
-          detail.evaluation.technical_skills = evalRes.technicalSkills
-          detail.evaluation.nontechnical_skills = evalRes.nonTechnicalSkills
+          detail.evaluation.total_score = score1
+          detail.evaluation.ai_suggested_total = score1
+          detail.evaluation.recommendation = evalRes1.recommendation
+          detail.evaluation.criteria = evalRes1.criteria
+          detail.evaluation.summary = evalRes1.summary
+          detail.evaluation.strengths = evalRes1.strengths
+          detail.evaluation.technical_skills = evalRes1.technicalSkills
+          detail.evaluation.nontechnical_skills = evalRes1.nonTechnicalSkills
+          detail.evaluation.role_evaluations = [
+            {
+              role_id: priority1,
+              priority: 'PRIMARY',
+              score: score1,
+              rank: 1,
+              total_candidates: 1,
+              fit: score1 >= 80 ? 'high' : score1 >= 65 ? 'medium' : 'low',
+              rationale: `Priority 1 (Primary Preference): ${evalRes1.summary}`,
+            },
+            {
+              role_id: priority2,
+              priority: 'SECONDARY',
+              score: score2,
+              rank: 1,
+              total_candidates: 1,
+              fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
+              rationale: `Priority 2 (Secondary Preference): ${evalRes2.summary}`,
+            },
+          ]
         }
 
         saveStoredLiveDetail(detail)
@@ -843,6 +1135,7 @@ export function reEvaluateStoredApplicants(): void {
     })
 
     if (updated) {
+      computeAndAssignDualPriorityRankings(applicants)
       saveStoredLiveApplicants(applicants)
       localStorage.setItem('sbg_eval_version', EVAL_VERSION)
     }
@@ -893,26 +1186,43 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
         findValue(row, ['year of study', 'current year', 'year', 'semester', 'sem']) ||
         '3rd Year'
 
-      const roleStr =
-        findValue(row, ['role', 'domain', 'team', 'position', 'applying for', 'preferred role', 'preference']) ||
-        'Technical Team'
-
       const submittedAt = findValue(row, ['timestamp', 'date', 'time']) || new Date().toISOString()
       const resumeLink = findValue(row, ['resume', 'cv', 'curriculum vitae', 'drive', 'portfolio', 'upload', 'link'])
 
-      const rawRoles = roleStr.split(/[,;|\n]+/).map((r) => r.trim()).filter(Boolean)
-      const roles = (rawRoles.length ? rawRoles : ['Technical Team']).map(canonicalizeRole)
+      const { priority1, priority2, roles } = extractApplicantPriorities(row)
 
-      // Comprehensive evaluation using the 5-point exact form rubric
-      const evalResult = evaluateStudentApplication(row, roles[0], resumeLink)
-      const score = evalResult.score
-      const recommendation = evalResult.recommendation
+      // Comprehensive evaluation for both priority roles
+      const evalResult1 = evaluateStudentApplication(row, priority1, resumeLink)
+      const evalResult2 = evaluateStudentApplication(row, priority2, resumeLink)
+      const score = evalResult1.score
+      const score2 = evalResult2.score
+      const recommendation = evalResult1.recommendation
 
       // Check if candidate already exists
       const existingMatch = existingByEmail.get(email.toLowerCase()) || existingByUsn.get(usn.toLowerCase())
       const applicantId = existingMatch
         ? existingMatch.applicantId
         : `AWS-2026-${String(existing.length + newApplicants.length + 1).padStart(3, '0')}`
+
+      const priority1Obj: RolePriorityScore = {
+        role: priority1,
+        priority: 'Priority 1',
+        score,
+        rank: 1,
+        totalInRole: 1,
+        fit: score >= 80 ? 'high' : score >= 65 ? 'medium' : 'low',
+        recommendation,
+      }
+
+      const priority2Obj: RolePriorityScore = {
+        role: priority2,
+        priority: 'Priority 2',
+        score: score2,
+        rank: 1,
+        totalInRole: 1,
+        fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
+        recommendation: evalResult2.recommendation,
+      }
 
       const brief: ApplicantBrief = {
         applicantId,
@@ -931,6 +1241,9 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
         urgentReview: false,
         documents: resumeLink ? 1 : 0,
         rubricVersion: '2026.2',
+        priority1: priority1Obj,
+        priority2: priority2Obj,
+        roleScores: { [priority1]: score, [priority2]: score2 },
       }
 
       // Create detail record
@@ -964,7 +1277,9 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
           recommendation,
           eligibility_status: 'PASS',
           eligibility_failures: [],
-          role_scores: { [roles[0]]: score },
+          role_scores: { [priority1]: score, [priority2]: score2 },
+          priority1: priority1Obj,
+          priority2: priority2Obj,
           latest_evaluation_id: `eval-${applicantId}`,
           rubric_version: '2026.2',
           form_title: 'AWS Student Builder Group SJBIT Recruitment 2026-27',
@@ -995,7 +1310,7 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
           evaluation_id: `eval-${applicantId}`,
           rubric_version: '2026.2',
           created_at: new Date().toISOString(),
-          criteria: evalResult.criteria,
+          criteria: evalResult1.criteria,
           total_score: score,
           max_score: 100,
           score_complete: true,
@@ -1007,14 +1322,14 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
           ],
           eligibility_status: 'PASS',
           eligibility_failures: [],
-          summary: evalResult.summary,
-          strengths: evalResult.strengths,
+          summary: evalResult1.summary,
+          strengths: evalResult1.strengths,
           weaknesses: [],
           missing_information: [],
           inconsistencies: [],
           uncertain_findings: [],
-          technical_skills: evalResult.technicalSkills,
-          nontechnical_skills: evalResult.nonTechnicalSkills,
+          technical_skills: evalResult1.technicalSkills,
+          nontechnical_skills: evalResult1.nonTechnicalSkills,
           projects: [],
           certifications: [],
           experience: [],
@@ -1022,18 +1337,37 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
           communication_evidence: [],
           interview_questions: [
             {
-              role: roles[0],
-              question: `Tell us about your experience related to ${roles[0]} and what inspired you to apply to AWS Student Builder Group at SJBIT.`,
+              role: priority1,
+              question: `Tell us about your experience related to ${priority1} and what inspired you to apply to AWS Student Builder Group at SJBIT.`,
               why: 'Assesses candidate motivation and core domain experience.',
             },
             {
-              role: roles[0],
+              role: priority2,
               question:
-                'Describe a challenging task or project you worked on recently and how you handled unexpected roadblocks.',
-              why: 'Evaluates resilience, domain execution, and problem solving.',
+                `Describe your familiarity with ${priority2} and how you can support this team if selected as secondary preference.`,
+              why: 'Evaluates adaptability and secondary domain execution.',
             },
           ],
-          role_evaluations: [{ role_id: roles[0], score, fit: score >= 80 ? 'high' : score >= 65 ? 'medium' : 'low', rationale: evalResult.summary }],
+          role_evaluations: [
+            {
+              role_id: priority1,
+              priority: 'PRIMARY',
+              score,
+              rank: 1,
+              total_candidates: 1,
+              fit: score >= 80 ? 'high' : score >= 65 ? 'medium' : 'low',
+              rationale: `Priority 1 (Primary Preference): ${evalResult1.summary}`,
+            },
+            {
+              role_id: priority2,
+              priority: 'SECONDARY',
+              score: score2,
+              rank: 1,
+              total_candidates: 1,
+              fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
+              rationale: `Priority 2 (Secondary Preference): ${evalResult2.summary}`,
+            },
+          ],
           confidence: 'high',
           model_metadata: { provider: 'gemini', model: 'gemini-1.5-flash', structured_output: true },
           validation_errors: [],
@@ -1067,7 +1401,7 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
   updatedApplicants.forEach((a) => finalMap.set(a.applicantId, a))
   newApplicants.forEach((a) => finalMap.set(a.applicantId, a))
 
-  const combined = Array.from(finalMap.values())
+  const combined = computeAndAssignDualPriorityRankings(Array.from(finalMap.values()))
   saveStoredLiveApplicants(combined)
   localStorage.setItem('sbg_eval_version', EVAL_VERSION)
 

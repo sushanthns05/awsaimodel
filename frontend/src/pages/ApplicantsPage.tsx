@@ -309,12 +309,34 @@ export function ApplicantsPage() {
                         </div>
                       </td>
                       <td>
-                        <div className="flex max-w-[200px] flex-wrap gap-1">
-                          {applicant.roles.map((item) => (
-                            <span key={item} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
-                              {roles.find((r) => r.id === item)?.name ?? humanise(item)}
-                            </span>
-                          ))}
+                        <div className="flex flex-col gap-1 min-w-[210px]">
+                          {applicant.priority1 ? (
+                            <div className="inline-flex items-center justify-between gap-1.5 rounded border border-blue-200 bg-blue-50/80 px-2 py-0.5 text-[11px] font-medium text-blue-900">
+                              <span className="truncate">
+                                <span className="font-bold text-blue-700">P1:</span> {roles.find((r) => r.id === applicant.priority1?.role)?.name ?? applicant.priority1.role}
+                              </span>
+                              <span className="shrink-0 rounded bg-blue-200/60 px-1 text-[10px] font-bold text-blue-900">
+                                #{applicant.priority1.rank} ({applicant.priority1.score})
+                              </span>
+                            </div>
+                          ) : null}
+                          {applicant.priority2 ? (
+                            <div className="inline-flex items-center justify-between gap-1.5 rounded border border-purple-200 bg-purple-50/80 px-2 py-0.5 text-[11px] font-medium text-purple-900">
+                              <span className="truncate">
+                                <span className="font-bold text-purple-700">P2:</span> {roles.find((r) => r.id === applicant.priority2?.role)?.name ?? applicant.priority2.role}
+                              </span>
+                              <span className="shrink-0 rounded bg-purple-200/60 px-1 text-[10px] font-bold text-purple-900">
+                                #{applicant.priority2.rank} ({applicant.priority2.score})
+                              </span>
+                            </div>
+                          ) : (
+                            !applicant.priority1 &&
+                            applicant.roles.map((item) => (
+                              <span key={item} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                                {roles.find((r) => r.id === item)?.name ?? humanise(item)}
+                              </span>
+                            ))
+                          )}
                         </div>
                       </td>
                       <td className="hidden md:table-cell text-xs text-slate-600">

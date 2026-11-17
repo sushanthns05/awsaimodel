@@ -274,12 +274,23 @@ export function ApplicantDetailPage() {
                 <p className="mt-1 text-[11px] text-slate-400">
                   Submitted {formatDate(applicant.submitted_at)} · Source response {applicant.source_response_id.slice(0, 12)}… · Rubric {applicant.rubric_version || '—'}
                 </p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {applicant.roles.map((role) => (
-                    <span key={role} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                      {roleNames.find((item) => item.id === role)?.name ?? humanise(role)}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {applicant.priority1 ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-900">
+                      🥇 Priority 1: {roleNames.find((item) => item.id === applicant.priority1?.role)?.name ?? applicant.priority1.role} · Rank #{applicant.priority1.rank} ({applicant.priority1.score}/100)
                     </span>
-                  ))}
+                  ) : null}
+                  {applicant.priority2 ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-purple-200 bg-purple-50 px-2.5 py-0.5 text-xs font-semibold text-purple-900">
+                      🥈 Priority 2: {roleNames.find((item) => item.id === applicant.priority2?.role)?.name ?? applicant.priority2.role} · Rank #{applicant.priority2.rank} ({applicant.priority2.score}/100)
+                    </span>
+                  ) : null}
+                  {!applicant.priority1 &&
+                    applicant.roles.map((role) => (
+                      <span key={role} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                        {roleNames.find((item) => item.id === role)?.name ?? humanise(role)}
+                      </span>
+                    ))}
                 </div>
               </div>
             </div>
@@ -395,18 +406,47 @@ export function ApplicantDetailPage() {
 
                 <Card>
                   <CardHeader>
-                    <CardTitle>Role fit</CardTitle>
-                    <CardDescription>Scores use each role&apos;s weighting profile.</CardDescription>
+                    <CardTitle>Dual-Priority Role Fit</CardTitle>
+                    <CardDescription>Evaluated scores and ranks for both applied priority roles.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    {evaluation.role_evaluations.map((item) => (
-                      <div key={item.role_id} className="rounded-lg border border-slate-200 p-3">
+                    {evaluation.role_evaluations.map((item, idx) => (
+                      <div
+                        key={item.role_id + idx}
+                        className={`rounded-lg border p-3.5 ${
+                          item.priority === 'PRIMARY' || idx === 0
+                            ? 'border-blue-200 bg-blue-50/40'
+                            : 'border-purple-200 bg-purple-50/40'
+                        }`}
+                      >
                         <div className="flex items-center justify-between">
-                          <p className="text-sm font-semibold text-navy-900">{roleNames.find((role) => role.id === item.role_id)?.name ?? humanise(item.role_id)}</p>
+                          <div>
+                            <span
+                              className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                                item.priority === 'PRIMARY' || idx === 0
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-purple-100 text-purple-800'
+                              }`}
+                            >
+                              {item.priority === 'PRIMARY' || idx === 0 ? '🥇 Priority 1' : '🥈 Priority 2'}
+                            </span>
+                            <p className="mt-1 text-sm font-bold text-navy-900">
+                              {roleNames.find((role) => role.id === item.role_id)?.name ?? humanise(item.role_id)}
+                            </p>
+                          </div>
                           <ScoreBadge score={item.score} />
                         </div>
-                        <p className="mt-1 text-[11px] text-slate-500">Fit: {humanise(item.fit)}</p>
-                        {item.rationale ? <p className="mt-1 text-xs text-slate-600">{item.rationale}</p> : null}
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                          {item.rank ? (
+                            <span className="font-semibold text-slate-700">
+                              Rank <span className="text-navy-900 font-bold">#{item.rank}</span>
+                              {item.total_candidates ? ` of ${item.total_candidates} applicants` : ''}
+                            </span>
+                          ) : null}
+                          <span className="text-slate-400">·</span>
+                          <span className="text-slate-600">Fit: <span className="font-semibold">{humanise(item.fit)}</span></span>
+                        </div>
+                        {item.rationale ? <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">{item.rationale}</p> : null}
                       </div>
                     ))}
                   </CardContent>

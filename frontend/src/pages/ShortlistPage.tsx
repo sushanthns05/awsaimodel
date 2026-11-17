@@ -40,6 +40,7 @@ export function ShortlistPage() {
   const queryClient = useQueryClient()
   const { can } = useAuth()
   const [role, setRole] = useState('')
+  const [priority, setPriority] = useState('')
   const [minScore, setMinScore] = useState('')
   const [maxScore, setMaxScore] = useState('')
   const [search, setSearch] = useState('')
@@ -59,11 +60,12 @@ export function ShortlistPage() {
   const queryParams = useMemo(
     () => ({
       role,
+      priority: priority || undefined,
       minScore: minScore ? Number(minScore) : undefined,
       maxScore: maxScore ? Number(maxScore) : undefined,
       limit: 300,
     }),
-    [role, minScore, maxScore],
+    [role, priority, minScore, maxScore],
   )
 
   const { data, isLoading, isError, error, refetch } = useQuery({
@@ -195,16 +197,24 @@ export function ShortlistPage() {
       ) : null}
 
       <Card>
-        <CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-5">
+        <CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-6">
           <div className="space-y-1">
             <Label>Role</Label>
             <Select value={role} onChange={(event) => setRole(event.target.value)}>
-              <option value="">All roles (best role score)</option>
+              <option value="">All roles (best score)</option>
               {roles.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
                 </option>
               ))}
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>Priority</Label>
+            <Select value={priority} onChange={(event) => setPriority(event.target.value)}>
+              <option value="">Both priorities (P1 & P2)</option>
+              <option value="P1">Priority 1 (Primary)</option>
+              <option value="P2">Priority 2 (Secondary)</option>
             </Select>
           </div>
           <div className="space-y-1">
@@ -380,15 +390,43 @@ function ShortlistRow({
         </button>
       </td>
       <td>
-        <div className="flex max-w-[180px] flex-wrap gap-1">
-          {item.roles.map((roleId) => (
-            <span key={roleId} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
-              {roleNames.find((role) => role.id === roleId)?.name ?? humanise(roleId)}
-            </span>
-          ))}
+        <div className="flex flex-col gap-1 min-w-[190px]">
+          {item.priority1 ? (
+            <div className="inline-flex items-center justify-between gap-1 rounded bg-blue-50 border border-blue-200/80 px-1.5 py-0.5 text-[10px] font-medium text-blue-900">
+              <span className="truncate">
+                <span className="font-bold text-blue-700">P1:</span> {roleNames.find((r) => r.id === item.priority1?.role)?.name ?? item.priority1.role}
+              </span>
+              <span className="shrink-0 rounded bg-blue-100 px-1 text-[9px] font-bold text-blue-800">
+                #{item.priority1.rank} ({item.priority1.score})
+              </span>
+            </div>
+          ) : null}
+          {item.priority2 ? (
+            <div className="inline-flex items-center justify-between gap-1 rounded bg-purple-50 border border-purple-200/80 px-1.5 py-0.5 text-[10px] font-medium text-purple-900">
+              <span className="truncate">
+                <span className="font-bold text-purple-700">P2:</span> {roleNames.find((r) => r.id === item.priority2?.role)?.name ?? item.priority2.role}
+              </span>
+              <span className="shrink-0 rounded bg-purple-100 px-1 text-[9px] font-bold text-purple-800">
+                #{item.priority2.rank} ({item.priority2.score})
+              </span>
+            </div>
+          ) : (
+            !item.priority1 && item.roles.map((roleId) => (
+              <span key={roleId} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                {roleNames.find((role) => role.id === roleId)?.name ?? humanise(roleId)}
+              </span>
+            ))
+          )}
         </div>
       </td>
-      <td className="text-right"><ScoreBadge score={item.roleScore} /></td>
+      <td className="text-right">
+        <ScoreBadge score={item.roleScore} />
+        {item.activeRolePriority ? (
+          <span className={`block text-[9px] font-semibold ${item.activeRolePriority === 'Priority 1' ? 'text-blue-600' : 'text-purple-600'}`}>
+            {item.activeRolePriority === 'Priority 1' ? 'P1 Role' : 'P2 Role'}
+          </span>
+        ) : null}
+      </td>
       <td className="text-right text-sm font-semibold tabular-nums text-navy-900">{formatScore(item.totalScore)}</td>
       <td><RecommendationBadge value={item.recommendation} /></td>
       <td className="hidden sm:table-cell"><EligibilityBadge value={item.eligibilityStatus} /></td>

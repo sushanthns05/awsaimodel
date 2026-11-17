@@ -49,7 +49,7 @@ export function generateApplicantPdf(detail: ApplicantDetail): void {
   // 2. Candidate Overview Card
   doc.setFillColor(248, 250, 252)
   doc.setDrawColor(226, 232, 240)
-  doc.roundedRect(margin, y, contentWidth, 35, 2, 2, 'FD')
+  doc.roundedRect(margin, y, contentWidth, 38, 2, 2, 'FD')
 
   // Candidate Name
   doc.setFont('helvetica', 'bold')
@@ -69,13 +69,20 @@ export function generateApplicantPdf(detail: ApplicantDetail): void {
   doc.setFontSize(8)
   doc.text(`USN: ${applicant.usn || '—'}   |   Department: ${applicant.department}   |   Year: ${applicant.year_of_study || '—'}`, margin + 4, y + 21)
   doc.text(`Email: ${applicant.email}   |   Phone: ${applicant.phone || '—'}`, margin + 4, y + 26)
-  doc.text(`Applied Role: ${applicant.roles.join(', ')}`, margin + 4, y + 31)
+
+  const p1Text = applicant.priority1
+    ? `P1: ${applicant.priority1.role} (#${applicant.priority1.rank}, ${applicant.priority1.score} pts)`
+    : `P1: ${applicant.roles[0] || 'Technical Team'}`
+  const p2Text = applicant.priority2
+    ? `P2: ${applicant.priority2.role} (#${applicant.priority2.rank}, ${applicant.priority2.score} pts)`
+    : (applicant.roles[1] ? `P2: ${applicant.roles[1]}` : '')
+  doc.text(`${p1Text}${p2Text ? `   |   ${p2Text}` : ''}`, margin + 4, y + 32)
 
   // Score Badge in Card Right
   const scoreBoxX = pageWidth - margin - 32
   doc.setFillColor(255, 247, 237) // Orange 50
   doc.setDrawColor(254, 215, 170)
-  doc.roundedRect(scoreBoxX, y + 3, 28, 29, 2, 2, 'FD')
+  doc.roundedRect(scoreBoxX, y + 4, 28, 30, 2, 2, 'FD')
 
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(7.5)
@@ -137,7 +144,51 @@ export function generateApplicantPdf(detail: ApplicantDetail): void {
 
   y += 2
 
-  // 4. Candidate Strengths & Identified Skills
+  // 2. Dual-Priority Applied Roles & Deterministic Rankings
+  if (y > 230) {
+    doc.addPage()
+    y = 18
+  }
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10.5)
+  doc.setTextColor(15, 23, 42)
+  doc.text('2. Dual-Priority Applied Roles & Deterministic Rankings', margin, y)
+  doc.setDrawColor(203, 213, 225)
+  doc.line(margin, y + 2, pageWidth - margin, y + 2)
+  y += 6
+
+  const roleEvals = evaluation?.role_evaluations || []
+  if (roleEvals.length > 0) {
+    roleEvals.forEach((re, idx) => {
+      const isP1 = re.priority === 'PRIMARY' || idx === 0
+      doc.setFillColor(isP1 ? 239 : 245, isP1 ? 246 : 243, isP1 ? 255 : 255) // Blue 50 or Purple 50
+      doc.setDrawColor(isP1 ? 191 : 216, isP1 ? 219 : 180, isP1 ? 254 : 254)
+      doc.roundedRect(margin, y, contentWidth, 14, 1.5, 1.5, 'FD')
+
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(8)
+      doc.setTextColor(isP1 ? 29 : 107, isP1 ? 78 : 33, isP1 ? 216 : 168)
+      doc.text(isP1 ? 'PRIORITY 1 (PRIMARY PREFERENCE)' : 'PRIORITY 2 (SECONDARY PREFERENCE)', margin + 3, y + 5)
+
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(9)
+      doc.setTextColor(15, 23, 42)
+      doc.text(re.role_id, margin + 3, y + 10)
+
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(8.5)
+      doc.setTextColor(51, 65, 85)
+      const rankStr = re.rank ? `Rank #${re.rank}${re.total_candidates ? ` of ${re.total_candidates}` : ''}` : ''
+      doc.text(`${rankStr}   |   Score: ${re.score}/100   |   Fit: ${re.fit || 'high'}`, pageWidth - margin - 3, y + 10, { align: 'right' })
+
+      y += 16
+    })
+  }
+
+  y += 2
+
+  // 3. Candidate Strengths & Identified Skills
   if (y > 245) {
     doc.addPage()
     y = 18
@@ -146,7 +197,7 @@ export function generateApplicantPdf(detail: ApplicantDetail): void {
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(10.5)
   doc.setTextColor(15, 23, 42)
-  doc.text('2. Extracted Competencies & Identified Strengths', margin, y)
+  doc.text('3. Extracted Competencies & Identified Strengths', margin, y)
   doc.setDrawColor(203, 213, 225)
   doc.line(margin, y + 2, pageWidth - margin, y + 2)
   y += 6
@@ -162,7 +213,7 @@ export function generateApplicantPdf(detail: ApplicantDetail): void {
 
   y += 3
 
-  // 5. Google Form Verbatim Responses
+  // 4. Google Form Verbatim Responses
   if (y > 225) {
     doc.addPage()
     y = 18
@@ -171,7 +222,7 @@ export function generateApplicantPdf(detail: ApplicantDetail): void {
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(10.5)
   doc.setTextColor(15, 23, 42)
-  doc.text('3. Google Form Submissions (Verbatim Candidate Answers)', margin, y)
+  doc.text('4. Google Form Submissions (Verbatim Candidate Answers)', margin, y)
   doc.setDrawColor(203, 213, 225)
   doc.line(margin, y + 2, pageWidth - margin, y + 2)
   y += 6
@@ -201,7 +252,7 @@ export function generateApplicantPdf(detail: ApplicantDetail): void {
     y += splitA.length * 3.5 + 2.5
   })
 
-  // 6. Committee Review & Sign-off Box
+  // 5. Committee Review & Sign-off Box
   if (y > 240) {
     doc.addPage()
     y = 18

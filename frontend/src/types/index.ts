@@ -19,6 +19,16 @@ export type Recommendation =
 
 export type ReviewStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'MANUAL_REVIEW'
 
+export interface RolePriorityScore {
+  role: string
+  priority: 'Priority 1' | 'Priority 2'
+  score: number
+  rank: number
+  totalInRole: number
+  fit: string
+  recommendation: Recommendation
+}
+
 export interface Principal {
   subject: string
   email: string
@@ -45,6 +55,9 @@ export interface ApplicantBrief {
   urgentReview: boolean
   documents: number
   rubricVersion: string
+  priority1?: RolePriorityScore
+  priority2?: RolePriorityScore
+  roleScores?: Record<string, number>
 }
 
 export interface ApplicantRecord {
@@ -76,6 +89,9 @@ export interface ApplicantRecord {
   eligibility_status: 'PASS' | 'FAIL' | 'UNKNOWN'
   eligibility_failures: string[]
   role_scores: Record<string, number>
+  priority1?: RolePriorityScore
+  priority2?: RolePriorityScore
+  role_ranks?: Record<string, { rank: number; priority: 'Priority 1' | 'Priority 2'; total_in_role: number }>
   latest_evaluation_id: string
   rubric_version: string
   form_title: string
@@ -154,7 +170,15 @@ export interface Evaluation {
   leadership_evidence: string[]
   communication_evidence: string[]
   interview_questions: InterviewQuestion[]
-  role_evaluations: { role_id: string; score: number; fit: string; rationale: string }[]
+  role_evaluations: {
+    role_id: string
+    priority?: 'PRIMARY' | 'SECONDARY' | string
+    score: number
+    rank?: number
+    total_candidates?: number
+    fit: string
+    rationale: string
+  }[]
   confidence: string
   model_metadata: Record<string, unknown>
   validation_errors: string[]
@@ -264,6 +288,9 @@ export interface ShortlistItem {
   urgentReview: boolean
   documents: number
   rank: number
+  priority1?: RolePriorityScore
+  priority2?: RolePriorityScore
+  activeRolePriority?: 'Priority 1' | 'Priority 2'
 }
 
 export interface ShortlistResponse {

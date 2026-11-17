@@ -29,6 +29,14 @@ export interface RolePriorityScore {
   recommendation: Recommendation
 }
 
+export interface ShortlistPriorityAllocation {
+  role: string
+  score: number
+  rank: number
+  sourcePriority: 'Priority 1' | 'Priority 2'
+  reason: string
+}
+
 export interface Principal {
   subject: string
   email: string
@@ -58,6 +66,7 @@ export interface ApplicantBrief {
   priority1?: RolePriorityScore
   priority2?: RolePriorityScore
   roleScores?: Record<string, number>
+  shortlistPriority?: ShortlistPriorityAllocation
 }
 
 export interface ApplicantRecord {
@@ -92,6 +101,7 @@ export interface ApplicantRecord {
   priority1?: RolePriorityScore
   priority2?: RolePriorityScore
   role_ranks?: Record<string, { rank: number; priority: 'Priority 1' | 'Priority 2'; total_in_role: number }>
+  shortlist_priority?: ShortlistPriorityAllocation
   latest_evaluation_id: string
   rubric_version: string
   form_title: string
@@ -291,6 +301,8 @@ export interface ShortlistItem {
   priority1?: RolePriorityScore
   priority2?: RolePriorityScore
   activeRolePriority?: 'Priority 1' | 'Priority 2'
+  shortlistPriority?: ShortlistPriorityAllocation
+  isShortlistPriorityRole?: boolean
 }
 
 export interface ShortlistResponse {

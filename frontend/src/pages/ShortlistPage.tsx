@@ -210,11 +210,12 @@ export function ShortlistPage() {
             </Select>
           </div>
           <div className="space-y-1">
-            <Label>Priority</Label>
+            <Label>Shortlist Priority</Label>
             <Select value={priority} onChange={(event) => setPriority(event.target.value)}>
-              <option value="">Both priorities (P1 & P2)</option>
-              <option value="P1">Priority 1 (Primary)</option>
-              <option value="P2">Priority 2 (Secondary)</option>
+              <option value="">All applied candidates</option>
+              <option value="SHORTLIST_PRIORITY">⭐ Shortlist Priority only (Top scoring role)</option>
+              <option value="P1">Priority 1 applicants only</option>
+              <option value="P2">Priority 2 applicants only</option>
             </Select>
           </div>
           <div className="space-y-1">
@@ -390,10 +391,19 @@ function ShortlistRow({
         </button>
       </td>
       <td>
-        <div className="flex flex-col gap-1 min-w-[190px]">
+        <div className="flex flex-col gap-1 min-w-[200px]">
           {item.priority1 ? (
-            <div className="inline-flex items-center justify-between gap-1 rounded bg-blue-50 border border-blue-200/80 px-1.5 py-0.5 text-[10px] font-medium text-blue-900">
-              <span className="truncate">
+            <div
+              className={`inline-flex items-center justify-between gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${
+                item.shortlistPriority?.role === item.priority1.role
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-semibold ring-1 ring-emerald-400/30'
+                  : 'bg-blue-50 border-blue-200/80 text-blue-900'
+              }`}
+            >
+              <span className="truncate flex items-center gap-1">
+                {item.shortlistPriority?.role === item.priority1.role ? (
+                  <span className="text-[11px]" title="Given priority for shortlisting into this role">🎯</span>
+                ) : null}
                 <span className="font-bold text-blue-700">P1:</span> {roleNames.find((r) => r.id === item.priority1?.role)?.name ?? item.priority1.role}
               </span>
               <span className="shrink-0 rounded bg-blue-100 px-1 text-[9px] font-bold text-blue-800">
@@ -402,8 +412,17 @@ function ShortlistRow({
             </div>
           ) : null}
           {item.priority2 ? (
-            <div className="inline-flex items-center justify-between gap-1 rounded bg-purple-50 border border-purple-200/80 px-1.5 py-0.5 text-[10px] font-medium text-purple-900">
-              <span className="truncate">
+            <div
+              className={`inline-flex items-center justify-between gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${
+                item.shortlistPriority?.role === item.priority2.role
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-semibold ring-1 ring-emerald-400/30'
+                  : 'bg-purple-50 border-purple-200/80 text-purple-900'
+              }`}
+            >
+              <span className="truncate flex items-center gap-1">
+                {item.shortlistPriority?.role === item.priority2.role ? (
+                  <span className="text-[11px]" title="Given priority for shortlisting into this role">🎯</span>
+                ) : null}
                 <span className="font-bold text-purple-700">P2:</span> {roleNames.find((r) => r.id === item.priority2?.role)?.name ?? item.priority2.role}
               </span>
               <span className="shrink-0 rounded bg-purple-100 px-1 text-[9px] font-bold text-purple-800">
@@ -421,9 +440,13 @@ function ShortlistRow({
       </td>
       <td className="text-right">
         <ScoreBadge score={item.roleScore} />
-        {item.activeRolePriority ? (
-          <span className={`block text-[9px] font-semibold ${item.activeRolePriority === 'Priority 1' ? 'text-blue-600' : 'text-purple-600'}`}>
-            {item.activeRolePriority === 'Priority 1' ? 'P1 Role' : 'P2 Role'}
+        {item.isShortlistPriorityRole ? (
+          <span className="mt-0.5 inline-flex items-center gap-0.5 rounded bg-emerald-100 px-1 text-[9px] font-bold text-emerald-900">
+            🎯 Shortlist Priority
+          </span>
+        ) : item.activeRolePriority ? (
+          <span className="block text-[9px] text-slate-400">
+            {item.shortlistPriority?.role ? `Top: ${item.shortlistPriority.score} in ${item.shortlistPriority.role}` : item.activeRolePriority}
           </span>
         ) : null}
       </td>

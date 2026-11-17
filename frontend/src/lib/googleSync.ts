@@ -1,4 +1,11 @@
-import type { ApplicantBrief, ApplicantDetail, Overview, RoleStat, RolePriorityScore } from '../types'
+import type {
+  ApplicantBrief,
+  ApplicantDetail,
+  Overview,
+  RoleStat,
+  RolePriorityScore,
+  ShortlistPriorityAllocation,
+} from '../types'
 
 export interface SyncResult {
   totalRows: number
@@ -9,7 +16,7 @@ export interface SyncResult {
 
 const STORAGE_KEY = 'sbg_live_applicants'
 const DETAILS_KEY = 'sbg_live_applicant_details'
-const EVAL_VERSION = '2026.4_dual_priority_rankings'
+const EVAL_VERSION = '2026.5_fair_scoring_shortlist_priority'
 
 export const COMMUNITY_ROLES = [
   'Technical Team',
@@ -495,18 +502,81 @@ export function extractApplicantPriorities(row: Record<string, string>): {
 }
 
 /**
+ * Determines which role should be given priority for shortlisting.
+ * If an applicant achieves a higher score in Priority 2 than Priority 1,
+ * Priority 2 is given shortlisting priority.
+ */
+export function determineShortlistPriority(
+  p1?: RolePriorityScore,
+  p2?: RolePriorityScore,
+  defaultRole: string = 'Technical Team'
+): ShortlistPriorityAllocation {
+  if (p1 && p2) {
+    if (p2.score > p1.score) {
+      return {
+        role: p2.role,
+        score: p2.score,
+        rank: p2.rank || 1,
+        sourcePriority: 'Priority 2',
+        reason: `Higher score achieved in Priority 2 (${p2.score} pts in ${p2.role} vs ${p1.score} pts in ${p1.role}). Prioritized for ${p2.role} shortlisting.`,
+      }
+    } else {
+      return {
+        role: p1.role,
+        score: p1.score,
+        rank: p1.rank || 1,
+        sourcePriority: 'Priority 1',
+        reason: `Top score achieved in Primary Preference (${p1.score} pts in ${p1.role} vs ${p2.score} pts in ${p2.role}). Prioritized for ${p1.role} shortlisting.`,
+      }
+    }
+  } else if (p1) {
+    return {
+      role: p1.role,
+      score: p1.score,
+      rank: p1.rank || 1,
+      sourcePriority: 'Priority 1',
+      reason: `Primary choice evaluated with score of ${p1.score}/100. Prioritized for ${p1.role} shortlisting.`,
+    }
+  }
+  return {
+    role: defaultRole,
+    score: 80,
+    rank: 1,
+    sourcePriority: 'Priority 1',
+    reason: `Allocated to ${defaultRole} based on candidate profile.`,
+  }
+}
+
+/**
  * Computes deterministic role rankings across all applicants for both Priority 1 and Priority 2 choices.
- * Updates both the brief and detailed applicant records with individual rank and role score.
+ * Automatically gives shortlisting priority to the role where the candidate achieved their higher score.
  */
 export function computeAndAssignDualPriorityRankings(applicants: ApplicantBrief[]): ApplicantBrief[] {
+  // 1. Assign shortlist priority allocation to each applicant based on which role they scored higher in
+  applicants.forEach((app) => {
+    app.shortlistPriority = determineShortlistPriority(app.priority1, app.priority2, app.roles[0])
+    if (app.priority1 && app.priority2) {
+      app.totalScore = Math.max(app.priority1.score, app.priority2.score)
+      app.recommendation =
+        app.totalScore >= 80 ? 'STRONG_INTERVIEW' : app.totalScore >= 65 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
+    }
+  })
+
+  // 2. Rank candidates for each role, giving shortlisting priority to candidates who scored higher in this role
   COMMUNITY_ROLES.forEach((roleName) => {
-    // 1. Gather all candidates who applied for this role (either as P1 or P2)
     const roleCandidates = applicants.filter(
       (a) => a.priority1?.role === roleName || a.priority2?.role === roleName
     )
 
-    // Sort descending by their score for this specific role
+    // Sort order:
+    // A) Candidates whose HIGHEST score is in this role (shortlist priority role) come first, sorted by score descending.
+    // B) Candidates who selected this role as secondary choice with lower score come next, sorted by score descending.
     roleCandidates.sort((a, b) => {
+      const isPriorityA = a.shortlistPriority?.role === roleName ? 1 : 0
+      const isPriorityB = b.shortlistPriority?.role === roleName ? 1 : 0
+      if (isPriorityA !== isPriorityB) {
+        return isPriorityB - isPriorityA
+      }
       const scoreA = a.priority1?.role === roleName ? a.priority1.score : (a.priority2?.score ?? 0)
       const scoreB = b.priority1?.role === roleName ? b.priority1.score : (b.priority2?.score ?? 0)
       return scoreB - scoreA
@@ -514,7 +584,6 @@ export function computeAndAssignDualPriorityRankings(applicants: ApplicantBrief[
 
     const totalInRole = roleCandidates.length
 
-    // Assign overall ranking within this role
     roleCandidates.forEach((a, idx) => {
       const rank = idx + 1
       if (a.priority1 && a.priority1.role === roleName) {
@@ -525,22 +594,31 @@ export function computeAndAssignDualPriorityRankings(applicants: ApplicantBrief[
         a.priority2.rank = rank
         a.priority2.totalInRole = totalInRole
       }
+      if (a.shortlistPriority && a.shortlistPriority.role === roleName) {
+        a.shortlistPriority.rank = rank
+      }
     })
   })
 
-  // Synchronize detailed records in storage
+  // 3. Synchronize detailed records in storage
   applicants.forEach((app) => {
     const detail = getStoredLiveDetail(app.applicantId)
     if (detail) {
       detail.brief = app
       detail.applicant.roles = app.roles
+      detail.applicant.total_score = app.totalScore
+      detail.applicant.recommendation = app.recommendation
       detail.applicant.priority1 = app.priority1
       detail.applicant.priority2 = app.priority2
+      detail.applicant.shortlist_priority = app.shortlistPriority
       detail.applicant.role_scores = {
         ...(app.priority1 ? { [app.priority1.role]: app.priority1.score } : {}),
         ...(app.priority2 ? { [app.priority2.role]: app.priority2.score } : {}),
       }
       if (detail.evaluation) {
+        detail.evaluation.total_score = app.totalScore
+        detail.evaluation.ai_suggested_total = app.totalScore
+        detail.evaluation.recommendation = app.recommendation
         detail.evaluation.role_evaluations = [
           ...(app.priority1
             ? [
@@ -551,7 +629,9 @@ export function computeAndAssignDualPriorityRankings(applicants: ApplicantBrief[
                   rank: app.priority1.rank,
                   total_candidates: app.priority1.totalInRole,
                   fit: app.priority1.fit || (app.priority1.score >= 80 ? 'high' : app.priority1.score >= 65 ? 'medium' : 'low'),
-                  rationale: `Priority 1 (Primary Preference): Evaluated score ${app.priority1.score}/100. Rank #${app.priority1.rank} of ${app.priority1.totalInRole} candidates in ${app.priority1.role}.`,
+                  rationale: `Priority 1 (Primary Preference): Evaluated score ${app.priority1.score}/100. Rank #${app.priority1.rank} of ${app.priority1.totalInRole} candidates in ${app.priority1.role}.${
+                    app.shortlistPriority?.role === app.priority1.role ? ' (🏆 Higher score — Shortlist Priority)' : ''
+                  }`,
                 },
               ]
             : []),
@@ -564,7 +644,9 @@ export function computeAndAssignDualPriorityRankings(applicants: ApplicantBrief[
                   rank: app.priority2.rank,
                   total_candidates: app.priority2.totalInRole,
                   fit: app.priority2.fit || (app.priority2.score >= 80 ? 'high' : app.priority2.score >= 65 ? 'medium' : 'low'),
-                  rationale: `Priority 2 (Secondary Preference): Evaluated score ${app.priority2.score}/100. Rank #${app.priority2.rank} of ${app.priority2.totalInRole} candidates in ${app.priority2.role}.`,
+                  rationale: `Priority 2 (Secondary Preference): Evaluated score ${app.priority2.score}/100. Rank #${app.priority2.rank} of ${app.priority2.totalInRole} candidates in ${app.priority2.role}.${
+                    app.shortlistPriority?.role === app.priority2.role ? ' (🏆 Higher score — Shortlist Priority)' : ''
+                  }`,
                 },
               ]
             : []),
@@ -1068,9 +1150,11 @@ export function reEvaluateStoredApplicants(): void {
 
         const score1 = evalRes1.score
         const score2 = evalRes2.score
+        const maxScore = Math.max(score1, score2)
+        const rec = maxScore >= 80 ? 'STRONG_INTERVIEW' : maxScore >= 65 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
 
-        brief.totalScore = score1
-        brief.recommendation = evalRes1.recommendation
+        brief.totalScore = maxScore
+        brief.recommendation = rec
         brief.roleScores = { [priority1]: score1, [priority2]: score2 }
 
         brief.priority1 = {
@@ -1091,17 +1175,19 @@ export function reEvaluateStoredApplicants(): void {
           fit: score2 >= 80 ? 'high' : score2 >= 65 ? 'medium' : 'low',
           recommendation: evalRes2.recommendation,
         }
+        brief.shortlistPriority = determineShortlistPriority(brief.priority1, brief.priority2, priority1)
 
-        detail.applicant.total_score = score1
-        detail.applicant.recommendation = evalRes1.recommendation
+        detail.applicant.total_score = maxScore
+        detail.applicant.recommendation = rec
         detail.applicant.priority1 = brief.priority1
         detail.applicant.priority2 = brief.priority2
+        detail.applicant.shortlist_priority = brief.shortlistPriority
         detail.applicant.role_scores = brief.roleScores
 
         if (detail.evaluation) {
-          detail.evaluation.total_score = score1
-          detail.evaluation.ai_suggested_total = score1
-          detail.evaluation.recommendation = evalRes1.recommendation
+          detail.evaluation.total_score = maxScore
+          detail.evaluation.ai_suggested_total = maxScore
+          detail.evaluation.recommendation = rec
           detail.evaluation.criteria = evalRes1.criteria
           detail.evaluation.summary = evalRes1.summary
           detail.evaluation.strengths = evalRes1.strengths
@@ -1196,7 +1282,9 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
       const evalResult2 = evaluateStudentApplication(row, priority2, resumeLink)
       const score = evalResult1.score
       const score2 = evalResult2.score
-      const recommendation = evalResult1.recommendation
+      const maxScore = Math.max(score, score2)
+      const recommendation =
+        maxScore >= 80 ? 'STRONG_INTERVIEW' : maxScore >= 65 ? 'INTERVIEW_CONSIDERATION' : 'MANUAL_REVIEW'
 
       // Check if candidate already exists
       const existingMatch = existingByEmail.get(email.toLowerCase()) || existingByUsn.get(usn.toLowerCase())
@@ -1211,7 +1299,7 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
         rank: 1,
         totalInRole: 1,
         fit: score >= 80 ? 'high' : score >= 65 ? 'medium' : 'low',
-        recommendation,
+        recommendation: evalResult1.recommendation,
       }
 
       const priority2Obj: RolePriorityScore = {
@@ -1224,6 +1312,8 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
         recommendation: evalResult2.recommendation,
       }
 
+      const shortlistPriority = determineShortlistPriority(priority1Obj, priority2Obj, priority1)
+
       const brief: ApplicantBrief = {
         applicantId,
         fullName,
@@ -1234,7 +1324,7 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
         roles,
         submittedAt,
         processingStatus: 'COMPLETED',
-        totalScore: score,
+        totalScore: maxScore,
         recommendation,
         eligibilityStatus: 'PASS',
         reviewStatus: existingMatch ? existingMatch.reviewStatus : 'PENDING',
@@ -1243,6 +1333,7 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
         rubricVersion: '2026.2',
         priority1: priority1Obj,
         priority2: priority2Obj,
+        shortlistPriority,
         roleScores: { [priority1]: score, [priority2]: score2 },
       }
 
@@ -1273,13 +1364,14 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
           review_decision: '',
           review_notes: '',
           reviewed_by: '',
-          total_score: score,
+          total_score: maxScore,
           recommendation,
           eligibility_status: 'PASS',
           eligibility_failures: [],
           role_scores: { [priority1]: score, [priority2]: score2 },
           priority1: priority1Obj,
           priority2: priority2Obj,
+          shortlist_priority: shortlistPriority,
           latest_evaluation_id: `eval-${applicantId}`,
           rubric_version: '2026.2',
           form_title: 'AWS Student Builder Group SJBIT Recruitment 2026-27',

@@ -414,8 +414,20 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
         priority1: app.priority1,
         priority2: app.priority2,
         activeRolePriority: activePriority,
+        shortlistPriority: app.shortlistPriority,
+        isShortlistPriorityRole: Boolean(
+          role &&
+            role !== 'all' &&
+            app.shortlistPriority &&
+            (canonicalizeRole(app.shortlistPriority.role).toLowerCase() === role ||
+              app.shortlistPriority.role.toLowerCase().replace(/[^a-z0-9]/g, '_') === role)
+        ),
       }
     })
+
+    if (priority === 'SHORTLIST_PRIORITY') {
+      items = items.filter((a) => a.isShortlistPriorityRole)
+    }
 
     if (minScore !== null && !isNaN(minScore)) {
       items = items.filter((a) => a.roleScore >= minScore)
@@ -425,8 +437,17 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
       items = items.filter((a) => a.roleScore <= maxScore)
     }
 
-    // Sort by roleScore descending
-    items.sort((a, b) => b.roleScore - a.roleScore)
+    // Sort order: candidates who achieved their HIGHER score in this role are prioritized for shortlisting!
+    items.sort((a, b) => {
+      if (role && role !== 'all') {
+        const aPri = a.isShortlistPriorityRole ? 1 : 0
+        const bPri = b.isShortlistPriorityRole ? 1 : 0
+        if (aPri !== bPri) {
+          return bPri - aPri
+        }
+      }
+      return b.roleScore - a.roleScore
+    })
     items.forEach((item, idx) => {
       item.rank = idx + 1
     })

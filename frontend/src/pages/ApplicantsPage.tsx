@@ -309,10 +309,19 @@ export function ApplicantsPage() {
                         </div>
                       </td>
                       <td>
-                        <div className="flex flex-col gap-1 min-w-[210px]">
+                        <div className="flex flex-col gap-1 min-w-[220px]">
                           {applicant.priority1 ? (
-                            <div className="inline-flex items-center justify-between gap-1.5 rounded border border-blue-200 bg-blue-50/80 px-2 py-0.5 text-[11px] font-medium text-blue-900">
-                              <span className="truncate">
+                            <div
+                              className={`inline-flex items-center justify-between gap-1.5 rounded border px-2 py-0.5 text-[11px] font-medium ${
+                                applicant.shortlistPriority?.role === applicant.priority1.role
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-semibold ring-1 ring-emerald-400/30'
+                                  : 'bg-blue-50/80 border-blue-200 text-blue-900'
+                              }`}
+                            >
+                              <span className="truncate flex items-center gap-1">
+                                {applicant.shortlistPriority?.role === applicant.priority1.role ? (
+                                  <span title="Given priority for shortlisting into this role">🎯</span>
+                                ) : null}
                                 <span className="font-bold text-blue-700">P1:</span> {roles.find((r) => r.id === applicant.priority1?.role)?.name ?? applicant.priority1.role}
                               </span>
                               <span className="shrink-0 rounded bg-blue-200/60 px-1 text-[10px] font-bold text-blue-900">
@@ -321,8 +330,17 @@ export function ApplicantsPage() {
                             </div>
                           ) : null}
                           {applicant.priority2 ? (
-                            <div className="inline-flex items-center justify-between gap-1.5 rounded border border-purple-200 bg-purple-50/80 px-2 py-0.5 text-[11px] font-medium text-purple-900">
-                              <span className="truncate">
+                            <div
+                              className={`inline-flex items-center justify-between gap-1.5 rounded border px-2 py-0.5 text-[11px] font-medium ${
+                                applicant.shortlistPriority?.role === applicant.priority2.role
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-semibold ring-1 ring-emerald-400/30'
+                                  : 'bg-purple-50/80 border-purple-200 text-purple-900'
+                              }`}
+                            >
+                              <span className="truncate flex items-center gap-1">
+                                {applicant.shortlistPriority?.role === applicant.priority2.role ? (
+                                  <span title="Given priority for shortlisting into this role">🎯</span>
+                                ) : null}
                                 <span className="font-bold text-purple-700">P2:</span> {roles.find((r) => r.id === applicant.priority2?.role)?.name ?? applicant.priority2.role}
                               </span>
                               <span className="shrink-0 rounded bg-purple-200/60 px-1 text-[10px] font-bold text-purple-900">

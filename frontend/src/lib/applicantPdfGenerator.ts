@@ -76,7 +76,10 @@ export function generateApplicantPdf(detail: ApplicantDetail): void {
   const p2Text = applicant.priority2
     ? `P2: ${applicant.priority2.role} (#${applicant.priority2.rank}, ${applicant.priority2.score} pts)`
     : (applicant.roles[1] ? `P2: ${applicant.roles[1]}` : '')
-  doc.text(`${p1Text}${p2Text ? `   |   ${p2Text}` : ''}`, margin + 4, y + 32)
+  const priText = applicant.shortlist_priority
+    ? `🎯 Shortlist Priority: ${applicant.shortlist_priority.role}`
+    : ''
+  doc.text(`${p1Text}${p2Text ? `   |   ${p2Text}` : ''}${priText ? `   |   ${priText}` : ''}`, margin + 4, y + 32)
 
   // Score Badge in Card Right
   const scoreBoxX = pageWidth - margin - 32
@@ -162,14 +165,26 @@ export function generateApplicantPdf(detail: ApplicantDetail): void {
   if (roleEvals.length > 0) {
     roleEvals.forEach((re, idx) => {
       const isP1 = re.priority === 'PRIMARY' || idx === 0
-      doc.setFillColor(isP1 ? 239 : 245, isP1 ? 246 : 243, isP1 ? 255 : 255) // Blue 50 or Purple 50
-      doc.setDrawColor(isP1 ? 191 : 216, isP1 ? 219 : 180, isP1 ? 254 : 254)
+      const isTopRole = applicant.shortlist_priority?.role === re.role_id
+
+      if (isTopRole) {
+        doc.setFillColor(236, 253, 245) // emerald 50
+        doc.setDrawColor(110, 231, 183) // emerald 300
+      } else {
+        doc.setFillColor(isP1 ? 239 : 245, isP1 ? 246 : 243, isP1 ? 255 : 255)
+        doc.setDrawColor(isP1 ? 191 : 216, isP1 ? 219 : 180, isP1 ? 254 : 254)
+      }
       doc.roundedRect(margin, y, contentWidth, 14, 1.5, 1.5, 'FD')
 
       doc.setFont('helvetica', 'bold')
       doc.setFontSize(8)
-      doc.setTextColor(isP1 ? 29 : 107, isP1 ? 78 : 33, isP1 ? 216 : 168)
-      doc.text(isP1 ? 'PRIORITY 1 (PRIMARY PREFERENCE)' : 'PRIORITY 2 (SECONDARY PREFERENCE)', margin + 3, y + 5)
+      if (isTopRole) {
+        doc.setTextColor(6, 95, 70) // emerald 800
+        doc.text(`${isP1 ? 'PRIORITY 1' : 'PRIORITY 2'} — 🎯 SHORTLIST ALLOCATION PRIORITY (HIGHER EVALUATED SCORE)`, margin + 3, y + 5)
+      } else {
+        doc.setTextColor(isP1 ? 29 : 107, isP1 ? 78 : 33, isP1 ? 216 : 168)
+        doc.text(isP1 ? 'PRIORITY 1 (PRIMARY PREFERENCE)' : 'PRIORITY 2 (SECONDARY PREFERENCE)', margin + 3, y + 5)
+      }
 
       doc.setFont('helvetica', 'bold')
       doc.setFontSize(9)

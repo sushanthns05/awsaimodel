@@ -341,6 +341,44 @@ export function ApplicantDetailPage() {
         </CardContent>
       </Card>
 
+      {applicant.shortlist_priority ? (
+        <div className="rounded-xl border border-emerald-300 bg-gradient-to-r from-emerald-50 via-teal-50/60 to-emerald-50 p-4 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-lg text-white shadow-sm">
+                🎯
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-emerald-200/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-950">
+                    Shortlist Allocation Priority
+                  </span>
+                  <span className="text-xs font-semibold text-emerald-800">
+                    {applicant.shortlist_priority.sourcePriority} Choice
+                  </span>
+                </div>
+                <h3 className="mt-0.5 text-base font-bold text-navy-900">
+                  Prioritized Role: <span className="text-emerald-700">{applicant.shortlist_priority.role}</span>
+                </h3>
+                <p className="mt-0.5 text-xs text-slate-600">
+                  {applicant.shortlist_priority.reason}
+                </p>
+              </div>
+            </div>
+            <div className="shrink-0 text-left sm:text-right sm:border-l sm:border-emerald-200 sm:pl-4">
+              <p className="text-[11px] font-medium text-slate-500">Peak Role Score</p>
+              <p className="text-xl font-bold text-emerald-800">
+                {formatScore(applicant.shortlist_priority.score)}
+                <span className="text-xs font-normal text-slate-500"> / 100</span>
+              </p>
+              <p className="text-[11px] font-semibold text-emerald-700">
+                Rank #{applicant.shortlist_priority.rank} in Role
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="evaluation">AI evaluation</TabsTrigger>
@@ -421,15 +459,22 @@ export function ApplicantDetailPage() {
                       >
                         <div className="flex items-center justify-between">
                           <div>
-                            <span
-                              className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                                item.priority === 'PRIMARY' || idx === 0
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : 'bg-purple-100 text-purple-800'
-                              }`}
-                            >
-                              {item.priority === 'PRIMARY' || idx === 0 ? '🥇 Priority 1' : '🥈 Priority 2'}
-                            </span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                                  item.priority === 'PRIMARY' || idx === 0
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : 'bg-purple-100 text-purple-800'
+                                }`}
+                              >
+                                {item.priority === 'PRIMARY' || idx === 0 ? '🥇 Priority 1' : '🥈 Priority 2'}
+                              </span>
+                              {applicant.shortlist_priority?.role === item.role_id ? (
+                                <span className="inline-flex items-center gap-0.5 rounded bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 text-[10px] font-bold text-emerald-900">
+                                  🎯 Shortlist Priority
+                                </span>
+                              ) : null}
+                            </div>
                             <p className="mt-1 text-sm font-bold text-navy-900">
                               {roleNames.find((role) => role.id === item.role_id)?.name ?? humanise(item.role_id)}
                             </p>

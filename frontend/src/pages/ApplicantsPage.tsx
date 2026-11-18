@@ -1,9 +1,18 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Download, Filter, RefreshCw, Search, Sparkles, X } from 'lucide-react'
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileSpreadsheet,
+  FileText,
+  Filter,
+  RefreshCw,
+  Search,
+  Sparkles,
+  X,
+} from 'lucide-react'
 import { api, type ApplicantFilters } from '../lib/api'
-import { useAuth } from '../hooks/useAuth'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import { formatDate, formatScore, humanise } from '../lib/utils'
 import { EmptyState, ErrorState, PageLoader } from '../components/States'
@@ -14,7 +23,10 @@ import { Select } from '../components/ui/select'
 import { Label } from '../components/ui/label'
 import { ScoreBadge, RecommendationBadge, StatusBadge, EligibilityBadge, ReviewBadge } from '../components/StatusBadges'
 import { GoogleFormSyncDialog } from '../components/GoogleFormSyncDialog'
-import { canonicalizeRole } from '../lib/googleSync'
+import { canonicalizeRole, getStoredLiveApplicants } from '../lib/googleSync'
+import { exportApplicantsToExcel } from '../lib/excelExport'
+import { exportContactsPdf } from '../lib/contactsPdfGenerator'
+import type { ApplicantBrief } from '../types'
 
 const STATUSES = ['RECEIVED', 'QUEUED', 'EXTRACTING', 'EXTRACTED', 'EVALUATING', 'SCORING', 'COMPLETED', 'NEEDS_REVIEW', 'FAILED']
 const RECOMMENDATIONS = ['STRONG_INTERVIEW', 'INTERVIEW_CONSIDERATION', 'MANUAL_REVIEW', 'ELIGIBILITY_REVIEW', 'NEEDS_REVIEW']
@@ -30,7 +42,6 @@ const DEFAULT_COMMUNITY_ROLES = [
 
 export function ApplicantsPage() {
   const navigate = useNavigate()
-  const { can } = useAuth()
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebouncedValue(search)
   const [role, setRole] = useState('')
@@ -44,7 +55,9 @@ export function ApplicantsPage() {
   const [showFilters, setShowFilters] = useState(false)
   const [cursor, setCursor] = useState('')
   const [history, setHistory] = useState<string[]>([])
-  const [exporting, setExporting] = useState(false)
+  const [exportingExcel, setExportingExcel] = useState(false)
+  const [exportingPdf, setExportingPdf] = useState(false)
+  const [exportNotice, setExportNotice] = useState('')
   const [syncDialogOpen, setSyncDialogOpen] = useState(false)
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings, staleTime: 300_000 })
@@ -99,14 +112,46 @@ export function ApplicantsPage() {
     setCursor(previous)
   }
 
-  async function exportExcel() {
-    setExporting(true)
+  function getExportList(): ApplicantBrief[] {
+    if (data?.items && data.items.length > 0) return data.items
+    return getStoredLiveApplicants()
+  }
+
+  function handleExportExcel() {
+    setExportingExcel(true)
+    setExportNotice('')
     try {
-      const record = await api.generateReport({ type: 'excel' })
-      if (record.downloadUrl) window.open(record.downloadUrl, '_blank', 'noopener,noreferrer')
-      else navigate('/reports')
+      const list = getExportList()
+      if (!list.length) {
+        setExportNotice('No applicants available to export. Please sync form responses first.')
+        return
+      }
+      exportApplicantsToExcel(list, { roleFilter: role })
+      setExportNotice(`Successfully exported ${list.length} applicants to Excel (.xlsx)!`)
+      setTimeout(() => setExportNotice(''), 4500)
+    } catch (err) {
+      setExportNotice(err instanceof Error ? err.message : 'Failed to export Excel')
     } finally {
-      setExporting(false)
+      setExportingExcel(false)
+    }
+  }
+
+  function handleExportContactsPdf() {
+    setExportingPdf(true)
+    setExportNotice('')
+    try {
+      const list = getExportList()
+      if (!list.length) {
+        setExportNotice('No applicants available to export. Please sync form responses first.')
+        return
+      }
+      exportContactsPdf(list, { roleFilter: role })
+      setExportNotice(`Successfully exported ${list.length} candidate contacts to PDF!`)
+      setTimeout(() => setExportNotice(''), 4500)
+    } catch (err) {
+      setExportNotice(err instanceof Error ? err.message : 'Failed to export Contacts PDF')
+    } finally {
+      setExportingPdf(false)
     }
   }
 
@@ -128,13 +173,42 @@ export function ApplicantsPage() {
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin text-aws-orange' : ''}`} /> Refresh
           </Button>
-          {can('reports') ? (
-            <Button variant="outline" size="sm" onClick={() => void exportExcel()} disabled={exporting}>
-              <Download className="h-3.5 w-3.5" /> {exporting ? 'Preparing…' : 'Export Excel'}
-            </Button>
-          ) : null}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportExcel}
+            disabled={exportingExcel}
+            title="Export full applicant matrix in Excel (.xlsx) format"
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+            {exportingExcel ? 'Exporting…' : 'Export Excel'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportContactsPdf}
+            disabled={exportingPdf}
+            title="Download applicant contact list (Name, Mobile, Email, Role) in PDF format"
+          >
+            <FileText className="h-3.5 w-3.5 text-blue-600" />
+            {exportingPdf ? 'Generating…' : 'Export Contacts PDF'}
+          </Button>
         </div>
       </div>
+
+      {exportNotice ? (
+        <div className="flex items-center justify-between rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 shadow-sm transition-all">
+          <span>{exportNotice}</span>
+          <button
+            type="button"
+            className="text-emerald-700 hover:text-emerald-900"
+            onClick={() => setExportNotice('')}
+            aria-label="Close notification"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
 
       <Card>
         <CardContent className="space-y-3 p-4 pt-4">

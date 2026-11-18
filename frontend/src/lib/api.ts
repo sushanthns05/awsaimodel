@@ -16,6 +16,8 @@ import {
   canonicalizeRole,
   roleMatchesFilter,
 } from './googleSync'
+import { exportApplicantsToExcel } from './excelExport'
+import { exportContactsPdf } from './contactsPdfGenerator'
 import type {
   AdminList,
   ApplicantDetail,
@@ -440,17 +442,33 @@ function resolveFallback<T>(path: string, _method = 'GET', body?: unknown): T | 
     } as unknown as T
   }
   if (path.startsWith('/reports/generate')) {
+    const b = (body as { type?: string; scope?: { role?: string; applicant_id?: string } }) || {}
+    const reportType = b.type || 'excel'
+
+    if (typeof window !== 'undefined') {
+      const applicants = getStoredLiveApplicants()
+      try {
+        if (reportType === 'excel') {
+          exportApplicantsToExcel(applicants, { roleFilter: b.scope?.role })
+        } else if (reportType.includes('pdf') || reportType.includes('contact')) {
+          exportContactsPdf(applicants, { roleFilter: b.scope?.role })
+        }
+      } catch {
+        // Non-blocking
+      }
+    }
+
     return {
       report_id: `REP-${Date.now()}`,
-      report_type: 'excel',
-      title: 'Generated Matrix Report',
+      report_type: reportType,
+      title: reportType === 'excel' ? 'Master Applicants Excel Workbook' : 'Applicants Evaluation Dossier',
       created_at: new Date().toISOString(),
       created_by: 'admin@sjbit.edu.in',
       status: 'READY',
-      download_url: '#',
+      download_url: '',
       file_size_bytes: 52000,
-      scope: {},
-      downloadUrl: '#',
+      scope: b.scope || {},
+      downloadUrl: '',
     } as unknown as T
   }
   if (path.startsWith('/reports')) return mockReportsList as unknown as T

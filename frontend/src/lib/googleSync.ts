@@ -17,7 +17,7 @@ export interface SyncResult {
 const STORAGE_KEY = 'sbg_live_applicants'
 const DETAILS_KEY = 'sbg_live_applicant_details'
 // Bumped to enforce strictly reading applied roles only and robust dual-priority score shortlisting
-const EVAL_VERSION = '2026.8_strict_applied_roles_fair_priority'
+const EVAL_VERSION = '2026.9_strict_roles_with_phone_export'
 
 export interface CommunityRole {
   id: string
@@ -264,6 +264,21 @@ export function clearStoredLiveApplicants(): void {
   } catch {
     // Ignore storage clear errors
   }
+}
+
+/** Extracts the real applicant phone/mobile from brief, detail, or form row */
+export function getApplicantContactPhone(brief: ApplicantBrief): string {
+  if (brief.phone && brief.phone.trim()) return brief.phone.trim()
+  const detail = getStoredLiveDetail(brief.applicantId)
+  if (detail?.applicant?.phone && detail.applicant.phone.trim()) {
+    return detail.applicant.phone.trim()
+  }
+  if (detail?.applicant?.responses) {
+    const row = detail.applicant.responses as Record<string, string>
+    const found = findValue(row, ['phone', 'mobile', 'whatsapp', 'contact', 'telephone', 'calling'])
+    if (found && found.trim()) return found.trim()
+  }
+  return '—'
 }
 
 /** Parses CSV text into array of object records following RFC 4180 (handles multiline cells, quotes, commas) */
@@ -1308,6 +1323,15 @@ export function reEvaluateStoredApplicants(): void {
       if (detail && detail.applicant && detail.applicant.responses) {
         const row = detail.applicant.responses as Record<string, string>
         const resumeLink = findValue(row, ['resume', 'cv', 'curriculum vitae', 'drive', 'portfolio', 'upload', 'link'])
+        const phone =
+          findValue(row, ['phone', 'mobile', 'whatsapp', 'contact', 'telephone', 'calling']) ||
+          detail.applicant.phone ||
+          brief.phone ||
+          ''
+        brief.phone = phone
+        detail.applicant.phone = phone
+        detail.brief.phone = phone
+
         const { priority1, priority2, roles } = extractApplicantPriorities(row)
 
         brief.roles = roles
@@ -1541,10 +1565,13 @@ export function importGoogleFormResponses(records: Record<string, string>[], res
 
       const activeEvalResult = shortlistPriority.role === priority2 && evalResult2 ? evalResult2 : (evalResult1 || evalResult2)
 
+      const phone = findValue(row, ['phone', 'mobile', 'whatsapp', 'contact', 'telephone', 'calling']) || ''
+
       const brief: ApplicantBrief = {
         applicantId,
         fullName,
         email,
+        phone,
         usn,
         department,
         yearOfStudy,

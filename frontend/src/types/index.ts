@@ -50,6 +50,7 @@ export interface ApplicantBrief {
   applicantId: string
   fullName: string
   email: string
+  phone?: string
   usn: string
   department: string
   yearOfStudy: string
